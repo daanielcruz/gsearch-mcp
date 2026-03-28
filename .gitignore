@@ -26,5 +26,9 @@ node_modules/
 CLAUDE.md
 .claude/
 
+# tools
+mcp-publisher
+.mcpregistry_*
+
 #other
 .sonarlint/

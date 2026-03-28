@@ -15,6 +15,7 @@
     "citations",
     "mcp"
   ],
+  "rules": "./rules/",
   "skills": "./skills/",
   "mcpServers": {
     "gsearch": {

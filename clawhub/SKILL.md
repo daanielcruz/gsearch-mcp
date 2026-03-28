@@ -1,6 +1,21 @@
 ---
 name: google-search
 description: Real-time web search with inline citations and source URLs for any MCP-compatible AI tool.
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - npx
+    emoji: "\U0001F50D"
+    homepage: https://github.com/daanielcruz/gsearch-mcp
+    os:
+      - macos
+      - linux
+      - windows
+    install:
+      - kind: node
+        package: "@daanielcruz/gsearch-mcp"
+        bins: [gsearch-mcp]
 ---
 
 # Google Search
