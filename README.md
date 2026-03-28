@@ -72,37 +72,27 @@ New accounts are auto-provisioned via the Google Code Assist API (SMS verificati
 
 ## Configuration
 
-The installer configures everything automatically. For manual setup:
-
-**Claude Code** -add to `~/.claude.json`:
+The installer configures everything automatically. For manual setup, add to your MCP client config:
 
 ```json
 {
   "mcpServers": {
     "gsearch": {
-      "command": "~/.gsearch/gsearch-server"
+      "command": "npx",
+      "args": ["-y", "@daanielcruz/gsearch-mcp"]
     }
   }
 }
 ```
 
-**Cursor** -add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+Works with Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and any MCP-compatible tool.
 
-```json
-{
-  "mcpServers": {
-    "gsearch": {
-      "command": "~/.gsearch/gsearch-server"
-    }
-  }
-}
-```
-
-**Codex CLI** -add to `~/.codex/config.toml`:
+For Codex CLI (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.gsearch]
-command = '~/.gsearch/gsearch-server'
+command = 'npx'
+args = ['-y', '@daanielcruz/gsearch-mcp']
 ```
 
 Set `GSEARCH_PROJECT` env var only if auto-detection fails.

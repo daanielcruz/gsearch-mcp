@@ -19,6 +19,8 @@ Thumbs.db
 # build artifacts
 /dist/
 /tmp/
+npm/.bin-cache/
+node_modules/
 
 # claude
 CLAUDE.md

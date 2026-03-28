@@ -1,0 +1,32 @@
+{
+  "name": "@daanielcruz/gsearch-mcp",
+  "version": "1.0.0",
+  "description": "Free Google Search MCP. Real-time web search with inline citations for any MCP-compatible AI tool.",
+  "mcpName": "io.github.daanielcruz/gsearch",
+  "bin": {
+    "gsearch-mcp": "./bin/run.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daanielcruz/gsearch-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "google-search",
+    "web-search",
+    "grounding",
+    "citations",
+    "claude-code",
+    "codex",
+    "cursor"
+  ],
+  "author": "Daniel Cruz",
+  "license": "MIT",
+  "homepage": "https://github.com/daanielcruz/gsearch-mcp",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/"
+  ]
+}
