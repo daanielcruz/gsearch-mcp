@@ -1,0 +1,19 @@
+{
+  "name": "gsearch-marketplace",
+  "owner": {
+    "name": "Daniel Cruz",
+    "url": "https://github.com/daanielcruz"
+  },
+  "plugins": [
+    {
+      "name": "gsearch",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "description": "GSearch - Free Google Search MCP. Give your AI tools real-time web search with citations.",
+      "version": "1.0.0",
+      "category": "productivity"
+    }
+  ]
+}

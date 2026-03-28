@@ -1,0 +1,28 @@
+# binaries
+gsearch-installer
+gsearch-server
+/installer
+/server
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# build artifacts
+/dist/
+/tmp/
+
+# claude
+CLAUDE.md
+.claude/
+
+#other
+.sonarlint/

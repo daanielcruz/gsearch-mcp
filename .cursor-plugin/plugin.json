@@ -1,0 +1,25 @@
+{
+  "name": "gsearch",
+  "version": "1.0.0",
+  "description": "Free Google Search for AI tools. Real-time web search with inline [1][2][3] citations and source URLs.",
+  "author": {
+    "name": "Daniel Cruz",
+    "url": "https://github.com/daanielcruz"
+  },
+  "repository": "https://github.com/daanielcruz/gsearch-mcp",
+  "license": "MIT",
+  "keywords": [
+    "google-search",
+    "web-search",
+    "grounding",
+    "citations",
+    "mcp"
+  ],
+  "rules": "./rules/",
+  "skills": "./skills/",
+  "mcpServers": {
+    "gsearch": {
+      "command": "~/.gsearch/gsearch-server"
+    }
+  }
+}
