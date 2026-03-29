@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,7 +37,9 @@ const (
 	endpoint     = "https://cloudcode-pa.googleapis.com/v1internal"
 	primaryModel  = "gemini-3-flash-preview"
 	fallbackModel = "gemini-2.5-flash"
-	maxRetries      = 4
+	maxAttempts       = 10
+	initialDelay      = 1 * time.Second
+	maxDelay          = 30 * time.Second
 	defaultRetryDelay = 2 * time.Second
 )
 
@@ -284,33 +287,128 @@ func pollOperation(token, opName string) (string, error) {
 
 // ─── google search ───
 
-func parseRetryDelay(body []byte) time.Duration {
+// error classification for retry logic (mirrors Gemini CLI)
+const (
+	errRetryable = iota // retry with backoff (per-minute limit, 503, network)
+	errTerminal         // switch model immediately (daily limit, quota exhausted)
+	errFatal            // stop entirely (400, 401)
+)
+
+type searchError struct {
+	status   int
+	kind     int // errRetryable, errTerminal, errFatal
+	delay    time.Duration
+	message  string
+}
+
+func parseDuration(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(s, "ms") {
+		if ms, err := strconv.ParseFloat(strings.TrimSuffix(s, "ms"), 64); err == nil {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	if strings.HasSuffix(s, "s") {
+		if secs, err := strconv.ParseFloat(strings.TrimSuffix(s, "s"), 64); err == nil {
+			return time.Duration(secs*1000) * time.Millisecond
+		}
+	}
+	return 0
+}
+
+func classifyError(statusCode int, body []byte) searchError {
+	se := searchError{status: statusCode, kind: errRetryable, delay: defaultRetryDelay}
+
+	// fatal: don't retry
+	if statusCode == 400 || statusCode == 401 || statusCode == 403 {
+		se.kind = errFatal
+		se.message = fmt.Sprintf("API %d: %s", statusCode, truncate(string(body), 300))
+		return se
+	}
+
+	// 404: model not found → switch model
+	if statusCode == 404 {
+		se.kind = errTerminal
+		se.message = "model not found"
+		return se
+	}
+
+	// 503: retryable server error
+	if statusCode == 503 {
+		se.kind = errRetryable
+		se.message = "service unavailable"
+		return se
+	}
+
+	// 429/499: parse error details to classify
+	if statusCode != 429 && statusCode != 499 {
+		se.message = fmt.Sprintf("API %d: %s", statusCode, truncate(string(body), 300))
+		return se
+	}
+
 	var errResp map[string]any
 	if json.Unmarshal(body, &errResp) != nil {
-		return defaultRetryDelay
+		se.message = "rate limited"
+		return se
 	}
+
 	errObj, _ := errResp["error"].(map[string]any)
 	details, _ := errObj["details"].([]any)
+
+	// collect all details before deciding (avoid early return missing RetryInfo)
 	for _, d := range details {
 		detail, _ := d.(map[string]any)
-		if retryInfo, ok := detail["retryDelay"].(string); ok {
-			retryInfo = strings.TrimSuffix(retryInfo, "s")
-			if secs, err := strconv.ParseFloat(retryInfo, 64); err == nil {
-				delay := time.Duration(secs*1000) * time.Millisecond
-				if delay < 500*time.Millisecond {
-					delay = 500 * time.Millisecond
+		dtype, _ := detail["@type"].(string)
+
+		switch dtype {
+		case "type.googleapis.com/google.rpc.ErrorInfo":
+			reason, _ := detail["reason"].(string)
+			switch reason {
+			case "QUOTA_EXHAUSTED", "INSUFFICIENT_G1_CREDITS_BALANCE":
+				se.kind = errTerminal
+				se.message = "quota exhausted"
+			case "RATE_LIMIT_EXCEEDED":
+				se.kind = errRetryable
+				se.message = "rate limited"
+			}
+
+		case "type.googleapis.com/google.rpc.QuotaFailure":
+			violations, _ := detail["violations"].([]any)
+			for _, v := range violations {
+				viol, _ := v.(map[string]any)
+				quotaID, _ := viol["quotaId"].(string)
+				if strings.Contains(quotaID, "PerDay") || strings.Contains(quotaID, "Daily") {
+					se.kind = errTerminal
+					se.message = "daily quota exhausted"
 				}
-				if delay > 30*time.Second {
-					delay = 30 * time.Second
+			}
+
+		case "type.googleapis.com/google.rpc.RetryInfo":
+			if rd, ok := detail["retryDelay"].(string); ok {
+				if d := parseDuration(rd); d > 0 {
+					se.delay = d
+					if d > 5*time.Minute {
+						se.kind = errTerminal
+						se.message = "rate limited (long delay)"
+					}
 				}
-				return delay
 			}
 		}
 	}
-	return defaultRetryDelay
+
+	// clamp only the default delay, not API-provided delays
+	if se.delay == defaultRetryDelay {
+		if se.delay < 500*time.Millisecond {
+			se.delay = 500 * time.Millisecond
+		}
+	}
+	if se.message == "" {
+		se.message = "rate limited"
+	}
+	return se
 }
 
-func doSearch(ctx context.Context, query, modelName, token, project string) (string, int, time.Duration, error) {
+func doSearch(ctx context.Context, query, modelName, token, project string) (string, int, searchError, error) {
 	reqBody := map[string]any{
 		"model":          modelName,
 		"project":        project,
@@ -332,22 +430,18 @@ func doSearch(ctx context.Context, query, modelName, token, project string) (str
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, 0, err
+		return "", 0, searchError{kind: errRetryable, message: err.Error()}, err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode == 429 {
-		delay := parseRetryDelay(respBody)
-		return "", 429, delay, fmt.Errorf("rate limited")
-	}
-
 	if resp.StatusCode != 200 {
-		return "", resp.StatusCode, 0, fmt.Errorf("API %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+		se := classifyError(resp.StatusCode, respBody)
+		return "", resp.StatusCode, se, fmt.Errorf("%s", se.message)
 	}
 
 	text, err := parseResponse(respBody)
-	return text, 200, 0, err
+	return text, 200, searchError{}, err
 }
 
 func googleSearch(ctx context.Context, query string) (string, error) {
@@ -369,32 +463,96 @@ func googleSearch(ctx context.Context, query string) (string, error) {
 	project := cachedProject
 	projectMu.Unlock()
 
-	// try primary model with retry + fallback
+	// retry with exponential backoff + jitter, model fallback on terminal errors
+	model := primaryModel
 	var lastErr error
-	models := []string{primaryModel, fallbackModel}
-	for _, m := range models {
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			text, status, retryAfter, err := doSearch(ctx, query, m, token, project)
-			if status == 200 {
-				return text, nil
-			}
-			if status == 429 {
-				if attempt < maxRetries-1 {
-					time.Sleep(retryAfter)
+	delay := initialDelay
+	consecutiveFails := 0
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		text, status, se, err := doSearch(ctx, query, model, token, project)
+		if status == 200 {
+			return text, nil
+		}
+
+		// check context cancellation immediately
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+
+		lastErr = err
+		consecutiveFails++
+
+		// fatal: try token refresh on 401, otherwise stop
+		if se.kind == errFatal {
+			if status == 401 {
+				if newToken, refreshErr := getToken(); refreshErr == nil {
+					token = newToken
+					consecutiveFails = 0
+					fmt.Fprintf(os.Stderr, "gsearch: refreshed token after 401, retrying\n")
 					continue
 				}
-				break // try fallback model
 			}
-			// non-429 error (500, 403, network) — try fallback model
-			lastErr = err
-			break
+			return "", err
+		}
+
+		// terminal: switch model immediately
+		if se.kind == errTerminal {
+			if model == primaryModel {
+				fmt.Fprintf(os.Stderr, "gsearch: terminal error on %s (%s), switching to fallback\n", model, se.message)
+				model = fallbackModel
+				consecutiveFails = 0
+				delay = initialDelay
+				continue
+			}
+			return "", fmt.Errorf("%s on all models", se.message)
+		}
+
+		// retryable: backoff with jitter
+		if consecutiveFails >= 3 && model == primaryModel {
+			fmt.Fprintf(os.Stderr, "gsearch: switching to fallback model after %d retryable failures\n", consecutiveFails)
+			model = fallbackModel
+			consecutiveFails = 0
+			delay = initialDelay
+		}
+
+		// pick delay: exponential backoff for client delay, respect API delay without jitter
+		wait := delay
+		useAPIDelay := se.delay > wait && se.delay != defaultRetryDelay
+		if useAPIDelay {
+			wait = se.delay // respect API-provided delay as-is
+		} else {
+			// apply ±30% jitter only to client-side backoff
+			jitter := 0.7 + rand.Float64()*0.6
+			wait = time.Duration(float64(wait) * jitter)
+			if wait > maxDelay {
+				wait = maxDelay
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "gsearch: attempt %d/%d failed (status %d, %s, model %s), retrying in %v\n",
+			attempt+1, maxAttempts, status, se.message, model, wait.Round(time.Millisecond))
+
+		// context-aware sleep
+		if attempt < maxAttempts-1 {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+
+		// exponential increase for next iteration
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
 		}
 	}
 
 	if lastErr != nil {
-		return "", lastErr
+		return "", fmt.Errorf("all models exhausted after %d attempts (last: %v)", maxAttempts, lastErr)
 	}
-	return "", fmt.Errorf("all models exhausted — try again shortly")
+	return "", fmt.Errorf("all models exhausted after %d attempts", maxAttempts)
 }
 
 func parseResponse(data []byte) (string, error) {

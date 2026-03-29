@@ -915,67 +915,93 @@ func TestTruncate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseRetryDelay
+// classifyError
 // ---------------------------------------------------------------------------
 
-func TestParseRetryDelay(t *testing.T) {
+func TestClassifyError(t *testing.T) {
 	tests := []struct {
-		name    string
-		body    string
-		wantMin time.Duration
-		wantMax time.Duration
+		name     string
+		status   int
+		body     string
+		wantKind int
+		wantMin  time.Duration
+		wantMax  time.Duration
 	}{
 		{
-			"valid 2s delay",
-			`{"error":{"details":[{"retryDelay":"2s"}]}}`,
-			2 * time.Second, 2 * time.Second,
+			"429 with RATE_LIMIT_EXCEEDED is retryable",
+			429,
+			`{"error":{"code":429,"message":"quota exceeded","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","domain":"cloudcode-pa.googleapis.com"},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1.950553118s"}]}}`,
+			errRetryable, 1950 * time.Millisecond, 1951 * time.Millisecond,
 		},
 		{
-			"fractional delay 0.35s",
-			`{"error":{"details":[{"retryDelay":"0.352176577s"}]}}`,
-			500 * time.Millisecond, 500 * time.Millisecond, // clamped to 500ms floor
+			"429 with QUOTA_EXHAUSTED is terminal",
+			429,
+			`{"error":{"code":429,"message":"quota exhausted","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com"}]}}`,
+			errTerminal, 0, 30 * time.Second,
 		},
 		{
-			"large delay clamped to 30s",
-			`{"error":{"details":[{"retryDelay":"120s"}]}}`,
-			30 * time.Second, 30 * time.Second,
+			"429 with PerDay quota is terminal",
+			429,
+			`{"error":{"code":429,"message":"daily limit","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateContentRequestsPerDay"}]}]}}`,
+			errTerminal, 0, 30 * time.Second,
 		},
 		{
-			"very small delay clamped to 500ms",
-			`{"error":{"details":[{"retryDelay":"0.01s"}]}}`,
-			500 * time.Millisecond, 500 * time.Millisecond,
+			"429 with long retryDelay (>5min) is terminal",
+			429,
+			`{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"600s"}]}}`,
+			errTerminal, 600 * time.Second, 600 * time.Second,
 		},
 		{
-			"missing retryDelay field",
-			`{"error":{"details":[{"@type":"some.type"}]}}`,
-			defaultRetryDelay, defaultRetryDelay,
+			"403 is fatal",
+			403,
+			`{"error":{"message":"forbidden"}}`,
+			errFatal, 0, 0,
 		},
 		{
-			"empty details array",
-			`{"error":{"details":[]}}`,
-			defaultRetryDelay, defaultRetryDelay,
+			"429 QUOTA_EXHAUSTED with RetryInfo preserves delay",
+			429,
+			`{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"45s"}]}}`,
+			errTerminal, 45 * time.Second, 45 * time.Second,
 		},
 		{
-			"malformed JSON",
-			`not json at all`,
-			defaultRetryDelay, defaultRetryDelay,
+			"429 with short retryDelay is retryable",
+			429,
+			`{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"2s"}]}}`,
+			errRetryable, 2 * time.Second, 2 * time.Second,
 		},
 		{
-			"no error key",
-			`{"status":"ok"}`,
-			defaultRetryDelay, defaultRetryDelay,
+			"400 is fatal",
+			400,
+			`{"error":{"message":"bad request"}}`,
+			errFatal, 0, 0,
 		},
 		{
-			"real Google 429 response",
-			`{"error":{"code":429,"message":"quota exceeded","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1.950553118s"}]}}`,
-			1950 * time.Millisecond, 1951 * time.Millisecond,
+			"404 is terminal (model not found)",
+			404,
+			`{"error":{"message":"not found"}}`,
+			errTerminal, 0, 0,
+		},
+		{
+			"503 is retryable",
+			503,
+			`{"error":{"message":"service unavailable"}}`,
+			errRetryable, 0, 30 * time.Second,
+		},
+		{
+			"malformed JSON defaults to retryable",
+			429,
+			`not json`,
+			errRetryable, defaultRetryDelay, defaultRetryDelay,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseRetryDelay([]byte(tt.body))
-			if got < tt.wantMin || got > tt.wantMax {
-				t.Errorf("parseRetryDelay() = %v, want between %v and %v", got, tt.wantMin, tt.wantMax)
+			se := classifyError(tt.status, []byte(tt.body))
+			if se.kind != tt.wantKind {
+				t.Errorf("classifyError() kind = %d, want %d", se.kind, tt.wantKind)
+			}
+			if tt.wantMin > 0 && (se.delay < tt.wantMin || se.delay > tt.wantMax) {
+				t.Errorf("classifyError() delay = %v, want between %v and %v", se.delay, tt.wantMin, tt.wantMax)
 			}
 		})
 	}
