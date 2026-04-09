@@ -143,11 +143,26 @@ func getToken() (string, error) {
 // ─── project ID ───
 
 func loadProject(token string) (string, error) {
-	if p := os.Getenv("GSEARCH_PROJECT"); p != "" {
-		return p, nil
+	envProject := os.Getenv("GSEARCH_PROJECT")
+	if envProject == "" {
+		envProject = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+	if envProject == "" {
+		envProject = os.Getenv("GOOGLE_CLOUD_PROJECT_ID")
+	}
+	if envProject != "" {
+		return envProject, nil
 	}
 
-	body := []byte(`{"cloudaicompanionProject":""}`)
+	loadReq := map[string]any{
+		"cloudaicompanionProject": "",
+		"metadata": map[string]any{
+			"ideType":    "GEMINI_CLI",
+			"platform":   "PLATFORM_UNSPECIFIED",
+			"pluginType": "GEMINI",
+		},
+	}
+	body, _ := json.Marshal(loadReq)
 	req, _ := http.NewRequest("POST", endpoint+":loadCodeAssist", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -166,55 +181,68 @@ func loadProject(token string) (string, error) {
 
 	var result map[string]any
 	json.Unmarshal(respBody, &result)
+
+	// already provisioned
 	if id, ok := result["cloudaicompanionProject"].(string); ok && id != "" {
 		return id, nil
 	}
 
-	// check for ineligible tiers with validation required
+	// check for validation required
 	if tiers, ok := result["ineligibleTiers"].([]any); ok {
 		for _, t := range tiers {
 			tier, _ := t.(map[string]any)
 			if reason, _ := tier["reasonCode"].(string); reason == "VALIDATION_REQUIRED" {
 				msg, _ := tier["reasonMessage"].(string)
-				url, _ := tier["validationUrl"].(string)
-				if url != "" {
-					return "", fmt.Errorf("account needs verification: %s\nVerify at: %s", msg, url)
+				vurl, _ := tier["validationUrl"].(string)
+				if vurl != "" {
+					return "", fmt.Errorf("account needs verification: %s\nVerify at: %s", msg, vurl)
 				}
 				return "", fmt.Errorf("account needs verification: %s", msg)
 			}
-			if reason, _ := tier["reasonMessage"].(string); reason != "" {
-				return "", fmt.Errorf("ineligible: %s", reason)
-			}
 		}
 	}
 
-	// free-tier is allowed but no project yet — onboard automatically
-	if hasTier(result, "allowedTiers", "free-tier") {
-		id, err := onboardUser(token, "free-tier")
-		if err != nil {
-			return "", fmt.Errorf("onboarding failed: %w", err)
-		}
-		return id, nil
+	// find the default onboarding tier (mirrors Gemini CLI's getOnboardTier)
+	tier := getDefaultTier(result)
+	if tier == nil {
+		return "", fmt.Errorf("no eligible tier found — set GSEARCH_PROJECT or GOOGLE_CLOUD_PROJECT env var")
 	}
 
-	return "", fmt.Errorf("project ID not found — run 'gemini' CLI first to provision your account, or set GSEARCH_PROJECT env var")
+	tierID, _ := tier["id"].(string)
+	needsProject, _ := tier["userDefinedCloudaicompanionProject"].(bool)
+
+	if needsProject {
+		return "", fmt.Errorf("this account requires GSEARCH_PROJECT or GOOGLE_CLOUD_PROJECT env var (tier: %s)", tierID)
+	}
+
+	// onboard with the default tier
+	id, err := onboardUser(token, tierID, "")
+	if err != nil {
+		return "", fmt.Errorf("onboarding failed: %w", err)
+	}
+	return id, nil
 }
 
-func hasTier(result map[string]any, field, tierID string) bool {
-	tiers, ok := result[field].([]any)
+func getDefaultTier(result map[string]any) map[string]any {
+	tiers, ok := result["allowedTiers"].([]any)
 	if !ok {
-		return false
+		return nil
 	}
 	for _, t := range tiers {
 		tier, _ := t.(map[string]any)
-		if id, _ := tier["id"].(string); id == tierID {
-			return true
+		if isDefault, _ := tier["isDefault"].(bool); isDefault {
+			return tier
 		}
 	}
-	return false
+	// fallback: first tier
+	if len(tiers) > 0 {
+		tier, _ := tiers[0].(map[string]any)
+		return tier
+	}
+	return nil
 }
 
-func onboardUser(token, tierID string) (string, error) {
+func onboardUser(token, tierID, projectID string) (string, error) {
 	reqBody := map[string]any{
 		"tierId": tierID,
 		"metadata": map[string]any{
@@ -222,6 +250,9 @@ func onboardUser(token, tierID string) (string, error) {
 			"platform":   "PLATFORM_UNSPECIFIED",
 			"pluginType": "GEMINI",
 		},
+	}
+	if projectID != "" {
+		reqBody["cloudaicompanionProject"] = projectID
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
 
