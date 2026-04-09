@@ -5,7 +5,7 @@ const { join } = require("path");
 const { spawn } = require("child_process");
 const https = require("https");
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const REPO = "daanielcruz/gsearch-mcp";
 const BIN_DIR = join(__dirname, "..", ".bin-cache");
 

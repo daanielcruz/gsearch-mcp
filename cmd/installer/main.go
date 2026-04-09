@@ -266,8 +266,15 @@ func emailFromCreds(c *oauthCreds) string {
 }
 
 func fetchProjectID(accessToken string) (string, error) {
-	body := []byte(`{"cloudaicompanionProject":""}`)
-	req, err := http.NewRequest("POST", codeAssistURL, bytes.NewReader(body))
+	loadReq, _ := json.Marshal(map[string]any{
+		"cloudaicompanionProject": "",
+		"metadata": map[string]any{
+			"ideType":    "GEMINI_CLI",
+			"platform":   "PLATFORM_UNSPECIFIED",
+			"pluginType": "GEMINI",
+		},
+	})
+	req, err := http.NewRequest("POST", codeAssistURL, bytes.NewReader(loadReq))
 	if err != nil {
 		return "", err
 	}
@@ -301,30 +308,41 @@ func fetchProjectID(accessToken string) (string, error) {
 		return "", &validationError{url: vURL}
 	}
 
-	// free-tier is allowed but no project yet — onboard
-	if hasTier(result, "allowedTiers", "free-tier") {
-		id, err := onboardUser(accessToken, "free-tier")
-		if err != nil {
-			return "", fmt.Errorf("onboarding failed: %w", err)
-		}
-		return id, nil
+	// find default tier from allowedTiers (mirrors Gemini CLI)
+	tier := getDefaultTier(result)
+	if tier == nil {
+		return "", fmt.Errorf("no eligible tier — set GSEARCH_PROJECT env var")
 	}
 
-	return "", fmt.Errorf("project ID not found — run 'gemini' CLI first to provision your account")
+	tierID, _ := tier["id"].(string)
+	needsProject, _ := tier["userDefinedCloudaicompanionProject"].(bool)
+	if needsProject {
+		return "", fmt.Errorf("this account requires GSEARCH_PROJECT or GOOGLE_CLOUD_PROJECT env var (tier: %s)", tierID)
+	}
+
+	id, err := onboardUser(accessToken, tierID)
+	if err != nil {
+		return "", fmt.Errorf("onboarding failed: %w", err)
+	}
+	return id, nil
 }
 
-func hasTier(result map[string]any, field, tierID string) bool {
-	tiers, ok := result[field].([]any)
+func getDefaultTier(result map[string]any) map[string]any {
+	tiers, ok := result["allowedTiers"].([]any)
 	if !ok {
-		return false
+		return nil
 	}
 	for _, t := range tiers {
 		tier, _ := t.(map[string]any)
-		if id, _ := tier["id"].(string); id == tierID {
-			return true
+		if isDefault, _ := tier["isDefault"].(bool); isDefault {
+			return tier
 		}
 	}
-	return false
+	if len(tiers) > 0 {
+		tier, _ := tiers[0].(map[string]any)
+		return tier
+	}
+	return nil
 }
 
 func onboardUser(accessToken, tierID string) (string, error) {
