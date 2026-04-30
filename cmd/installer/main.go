@@ -87,7 +87,7 @@ type model struct {
 	scopeProject bool
 	scopeCursor  int
 	// auth
-	authCursor   int    // 0=gemini, 1=fresh
+	authCursor   int    // 0=gemini, 1=fresh, 2=apikey
 	geminiFound  bool
 	geminiEmail  string
 	authWaiting  bool   // waiting for browser callback
@@ -98,6 +98,9 @@ type model struct {
 	pasteError   string
 	account      string
 	accessToken  string
+	useAPIKey    bool
+	apiKeyInput  textinput.Model
+	apiKeyMode   bool
 	// project + wire
 	verifyURL   string
 	project     string
@@ -743,16 +746,26 @@ func verifyWaitCmd(accessToken string) tea.Cmd {
 	}
 }
 
-func installCmd(project, accessToken string) tea.Cmd {
+func installCmd(m model) tea.Cmd {
 	return func() tea.Msg {
 		home, _ := os.UserHomeDir()
 		dir := filepath.Join(home, ".gsearch")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return errMsg{err}
 		}
-		cfg := map[string]any{
-			"project":      project,
-			"installed_at": time.Now().Format(time.RFC3339),
+		var cfg map[string]any
+		if m.useAPIKey {
+			cfg = map[string]any{
+				"auth_type":    "api-key",
+				"api_key":      m.accessToken,
+				"installed_at": time.Now().Format(time.RFC3339),
+			}
+		} else {
+			cfg = map[string]any{
+				"auth_type":    "oauth",
+				"project":      m.project,
+				"installed_at": time.Now().Format(time.RFC3339),
+			}
 		}
 		data, _ := json.MarshalIndent(cfg, "", "  ")
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0600); err != nil {
@@ -1110,6 +1123,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// API key input mode
+	if m.apiKeyMode {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "esc":
+				m.apiKeyMode = false
+				m.step = stepAuthChoice
+				return m, nil
+			case "enter":
+				key := strings.TrimSpace(m.apiKeyInput.Value())
+				if key == "" {
+					return m, nil
+				}
+				m.apiKeyMode = false
+				m.useAPIKey = true
+				m.accessToken = key
+				m.account = "API key"
+				m.step = stepInstall
+				return m, installCmd(m)
+			}
+			var cmd tea.Cmd
+			m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -1185,9 +1230,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scopeUser = false
 				m.scopeProject = true
 			}
-			maxAuth := 0
+			maxAuth := 1
 			if m.geminiFound {
-				maxAuth = 1
+				maxAuth = 2
 			}
 			if m.step == stepAuthChoice && m.authCursor < maxAuth {
 				m.authCursor++
@@ -1227,15 +1272,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, func() tea.Msg { return authCheckCmd() }
 
 			case stepAuthChoice:
-				if m.geminiFound && m.authCursor == 0 {
+				lastOpt := m.authCursor
+				if !m.geminiFound {
+					lastOpt++ // shift indices when gemini not found
+				}
+				switch lastOpt {
+				case 0:
 					// use gemini token
 					m.step = stepAuth
 					return m, func() tea.Msg { return geminiAuthCmd() }
+				case 1:
+					// fresh oauth
+					m.step = stepAuth
+					m.authWaiting = true
+					return m, func() tea.Msg { return freshOAuthStart() }
+				case 2:
+					// API key
+					m.step = stepAuth
+					m.apiKeyMode = true
+					m.apiKeyInput = textinput.New()
+					m.apiKeyInput.Placeholder = "AIza..."
+					m.apiKeyInput.Focus()
+					m.apiKeyInput.CharLimit = 100
+					return m, m.apiKeyInput.Focus()
 				}
-				// fresh oauth
-				m.step = stepAuth
-				m.authWaiting = true
-				return m, func() tea.Msg { return freshOAuthStart() }
 
 			case stepDone:
 				return m, tea.Quit
@@ -1287,7 +1347,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectDoneMsg:
 		m.project = msg.project
 		m.step = stepInstall
-		return m, installCmd(m.project, m.accessToken)
+		return m, installCmd(m)
 
 	case installDoneMsg:
 		m.step = stepWire
@@ -1416,6 +1476,7 @@ func (m model) View() string {
 				opts = append(opts, authOpt{"gemini token", hint})
 			}
 			opts = append(opts, authOpt{"google login", "opens browser"})
+			opts = append(opts, authOpt{"API key", "from aistudio.google.com"})
 
 			for i, o := range opts {
 				cur := "  "
@@ -1429,6 +1490,14 @@ func (m model) View() string {
 				b.WriteString(fmt.Sprintf("  %s%s  %s\n", cur, label, dim.Render(o.hint)))
 			}
 			b.WriteString(fmt.Sprintf("\n  %s\n", dim.Render("enter: confirm · esc: back · q: quit")))
+		}
+
+		// api key input
+		if m.step == stepAuth && m.apiKeyMode {
+			b.WriteString(logLine("auth", "enter your Gemini API key:", false))
+			b.WriteString(logAction(dim.Render("get one at https://aistudio.google.com/apikey")))
+			b.WriteString(logAction(m.apiKeyInput.View()))
+			b.WriteString(fmt.Sprintf("\n  %s\n", dim.Render("enter: confirm · esc: back")))
 		}
 
 		// auth waiting
