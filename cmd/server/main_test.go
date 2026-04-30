@@ -752,7 +752,7 @@ func TestDoSearch(t *testing.T) {
 		defer srv.Close()
 
 		// Temporarily override the endpoint
-		origEndpoint := endpoint
+		origEndpoint := oauthEndpoint
 		// Since endpoint is a const, we cannot reassign it. Instead, we build
 		// the request body and call the mock server directly to verify the
 		// contract. For actual integration, we test parseResponse and
@@ -982,10 +982,10 @@ func TestClassifyError(t *testing.T) {
 			errTerminal, 0, 0,
 		},
 		{
-			"503 is retryable",
+			"503 is terminal (switch model)",
 			503,
 			`{"error":{"message":"service unavailable"}}`,
-			errRetryable, 0, 30 * time.Second,
+			errTerminal, 0, 30 * time.Second,
 		},
 		{
 			"malformed JSON defaults to retryable",
