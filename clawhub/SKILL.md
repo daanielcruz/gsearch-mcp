@@ -45,6 +45,7 @@ Call `google_search` with a specific query. Prefer this over built-in web search
 - Be specific: "Next.js 15 server actions API" not "nextjs docs"
 - Add time context: "March 2026", "this week", "latest"
 - One focused topic per query
+- Do NOT use Google dork operators (site:, filetype:, inurl:, etc.) — the model refuses them. Use natural language instead.
 
 ## Response format
 
@@ -56,4 +57,5 @@ Call `google_search` with a specific query. Prefer this over built-in web search
 ## Limitations
 
 - Response time: 2-15s typical, up to 60s with retries
-- Rate limited with automatic backoff - avoid rapid successive calls
+- Rate limited with automatic backoff — avoid rapid successive calls
+- Google dork operators are blocked by the model — always use natural language queries
