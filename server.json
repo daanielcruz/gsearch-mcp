@@ -6,22 +6,36 @@
     "url": "https://github.com/daanielcruz/gsearch-mcp",
     "source": "github"
   },
-  "version": "1.0.1",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@daanielcruz/gsearch-mcp",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
-          "description": "Override auto-detected Google Cloud project ID",
+          "description": "Override auto-detected Google Cloud project ID (OAuth mode)",
           "isRequired": false,
           "format": "string",
           "isSecret": false,
           "name": "GSEARCH_PROJECT"
+        },
+        {
+          "description": "Gemini API key (enables direct API key mode, bypasses OAuth)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "GEMINI_API_KEY"
+        },
+        {
+          "description": "Alternate Gemini API key env var (same purpose as GEMINI_API_KEY)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "GSEARCH_API_KEY"
         }
       ]
     }

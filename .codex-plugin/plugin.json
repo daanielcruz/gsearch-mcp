@@ -1,6 +1,6 @@
 {
   "name": "gsearch",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Free Google Search for AI tools. Real-time web search with inline [1][2][3] citations and source URLs.",
   "author": {
     "name": "Daniel Cruz",

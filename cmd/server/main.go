@@ -30,6 +30,17 @@ func geminiUserAgent(model string) string {
 	return fmt.Sprintf("GeminiCLI/%s/%s (%s; %s; terminal)", geminiCLIVersion, model, runtime.GOOS, runtime.GOARCH)
 }
 
+func chromePlatform() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return `"macOS"`
+	case "windows":
+		return `"Windows"`
+	default:
+		return `"Linux"`
+	}
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -45,7 +56,8 @@ const (
 	tokenURL          = "https://oauth2.googleapis.com/token"
 	oauthEndpoint      = "https://cloudcode-pa.googleapis.com/v1internal"
 	apiKeyEndpoint     = "https://generativelanguage.googleapis.com/v1beta"
-	defaultModel       = "gemini-2.5-flash"
+	defaultModel       = "gemini-3-flash-preview"
+	fallbackModel      = "gemini-2.5-flash"
 	geminiCLIVersion   = "0.40.0"
 	maxAttempts       = 10
 	initialDelay      = 1 * time.Second
@@ -809,7 +821,16 @@ func resolveRedirects(urls []string) []string {
 		go func(idx int, rawURL string) {
 			defer wg.Done()
 			req, _ := http.NewRequest("HEAD", rawURL, nil)
-			req.Header.Set("User-Agent", "Mozilla/5.0")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+			req.Header.Set("Sec-Ch-Ua", `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`)
+			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+			req.Header.Set("Sec-Ch-Ua-Platform", chromePlatform())
+			req.Header.Set("Sec-Fetch-Dest", "document")
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
 			resp, err := client.Do(req)
 			if err != nil {
 				return
@@ -879,7 +900,7 @@ func loadConfig() {
 
 func main() {
 	// load config (models, api key)
-	models = []string{defaultModel}
+	models = []string{defaultModel, fallbackModel}
 	loadConfig()
 
 	if apiKey == "" {
@@ -891,15 +912,15 @@ func main() {
 
 	s := server.NewMCPServer(
 		"gsearch",
-		"1.0.1",
+		"1.1.0",
 		server.WithToolCapabilities(false),
 	)
 
 	tool := mcp.NewTool("google_search",
-		mcp.WithDescription("Search the web using Google Search grounding. Returns an answer with inline citations and source URLs. Use for current events, documentation, news, or any real-time web information.\n\nResponse time: 2-15s typical, up to 60s with retries. On 429 the server retries automatically with dynamic backoff (typically 2s) and falls back to an alternate model. Avoid calling this tool in rapid succession — batch your search needs into a single, well-crafted query when possible.\n\nIMPORTANT: Do NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, etc.) in the query. The underlying model will refuse dork-style queries and return safety warnings instead of results. Write queries in natural language — the grounding engine handles search optimization internally."),
+		mcp.WithDescription("Search the web using Google Search grounding. Returns an answer with inline citations and source URLs. Use for current events, documentation, news, or any real-time web information.\n\nResponse time: 2-15s typical, up to 60s with retries. On 429 the server retries automatically with dynamic backoff (typically 2s) and falls back to an alternate model. Avoid calling this tool in rapid succession — batch your search needs into a single, well-crafted query when possible.\n\nDo NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway."),
 		mcp.WithString("query",
 			mcp.Required(),
-			mcp.Description("Natural language search query — do NOT use Google dork operators (site:, filetype:, inurl:, etc.)"),
+			mcp.Description("Do NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway."),
 		),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),

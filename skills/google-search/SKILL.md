@@ -14,7 +14,7 @@ Prefer this tool over built-in web search when freshness and citations matter.
 - Be specific: "Next.js 15 server actions API" not "nextjs docs"
 - Add time context when relevant: "March 2026", "this week", "latest"
 - One focused topic per query works better than broad multi-topic queries
-- Do NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, etc.) — the underlying model refuses them and returns safety warnings instead of results. Rephrase as natural language.
+- Do NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway.
 
 ## Response format
 
@@ -26,7 +26,5 @@ Prefer this tool over built-in web search when freshness and citations matter.
 
 ## Limitations
 
-- Rate limited: the server retries automatically with dynamic backoff, but avoid rapid successive calls
 - Response time: 2-15s typical, up to 60s with retries
 - Results are Google Search grounded — best for factual and current information, not for opinions or subjective content
-- Google dork operators are blocked by the model — always use natural language queries

@@ -109,6 +109,7 @@ type model struct {
 	testSources int
 	testChars   int
 	testElapsed float64
+	testText    string
 	// misc
 	err      error
 	width    int
@@ -983,6 +984,7 @@ type testDoneOKMsg struct {
 	sources int
 	chars   int
 	elapsed float64
+	text    string
 }
 
 func testCmd(project string) tea.Msg {
@@ -996,7 +998,7 @@ func testCmd(project string) tea.Msg {
 	// build MCP initialize + tool call sequence
 	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"gsearch-test","version":"1.0"}}}`
 	notifyMsg := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"google_search","arguments":{"query":"what time is it"}}}`
+	callMsg := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"google_search","arguments":{"query":"latest news today"}}}`
 
 	input := initMsg + "\n" + notifyMsg + "\n" + callMsg + "\n"
 
@@ -1047,7 +1049,35 @@ func testCmd(project string) tea.Msg {
 	}
 
 	sources := strings.Count(text, "(https://")
-	return testDoneOKMsg{sources: sources, chars: len(text), elapsed: elapsed}
+	return testDoneOKMsg{sources: sources, chars: len(text), elapsed: elapsed, text: text}
+}
+
+func wrapLine(s string, width int) []string {
+	if width <= 0 || len(s) <= width {
+		return []string{s}
+	}
+	var out []string
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{s}
+	}
+	cur := ""
+	for _, w := range words {
+		if cur == "" {
+			cur = w
+			continue
+		}
+		if len(cur)+1+len(w) <= width {
+			cur += " " + w
+		} else {
+			out = append(out, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
 }
 
 func truncateStr(s string, n int) string {
@@ -1362,6 +1392,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.testSources = msg.sources
 		m.testChars = msg.chars
 		m.testElapsed = msg.elapsed
+		m.testText = msg.text
 		m.step = stepDone
 		return m, nil
 
@@ -1387,7 +1418,7 @@ func (m model) View() string {
 	switch m.step {
 	case stepBolt, stepDisclaimer:
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.0.0")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.1.0")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("free google search for ai cli tools")))
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("%s\n", yellow.Render("⚠ unofficial · not affiliated with google · use at your own risk")))
@@ -1398,7 +1429,7 @@ func (m model) View() string {
 	default:
 		// header
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.0.0")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.1.0")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("free google search for ai cli tools")))
 		b.WriteString("\n")
 
@@ -1469,14 +1500,14 @@ func (m model) View() string {
 			}
 			var opts []authOpt
 			if m.geminiFound {
-				hint := "~/.gemini/oauth_creds.json"
+				hint := "reuse OAuth creds found at ~/.gemini/oauth_creds.json"
 				if m.geminiEmail != "" {
-					hint = m.geminiEmail
+					hint = "reuse " + m.geminiEmail + " found at ~/.gemini/oauth_creds.json"
 				}
-				opts = append(opts, authOpt{"gemini token", hint})
+				opts = append(opts, authOpt{"gemini-cli OAuth", hint})
 			}
-			opts = append(opts, authOpt{"google login", "opens browser"})
-			opts = append(opts, authOpt{"API key", "from aistudio.google.com"})
+			opts = append(opts, authOpt{"google login", "fresh OAuth via browser"})
+			opts = append(opts, authOpt{"API key", "paste Gemini API key"})
 
 			for i, o := range opts {
 				cur := "  "
@@ -1577,6 +1608,21 @@ func (m model) View() string {
 			b.WriteString("\n")
 			charLabel := fmt.Sprintf("%.1fk", float64(m.testChars)/1000)
 			b.WriteString(logLine("test", fmt.Sprintf("%d sources · %s chars · %.1fs", m.testSources, charLabel, m.testElapsed), true))
+			if m.testText != "" {
+				preview := m.testText
+				if len(preview) > 400 {
+					preview = preview[:400] + "..."
+				}
+				width := m.width - 4
+				if width < 40 {
+					width = 40
+				}
+				for _, line := range strings.Split(strings.TrimSpace(preview), "\n") {
+					for _, wrapped := range wrapLine(line, width) {
+						b.WriteString(logAction(dim.Render(wrapped)))
+					}
+				}
+			}
 		}
 
 		// done

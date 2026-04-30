@@ -1,5 +1,19 @@
 <div align="center">
 
+>
+> ### 🚨 Disclaimer 🚨
+>
+> **This is just a heads-up. We haven't seen any bans from GSearch use.**
+>
+> Not affiliated with Google. Uses the same public OAuth client and API as the [open-source Gemini CLI](https://github.com/google-gemini/gemini-cli).
+>
+> 
+> Google recently banned some OpenClaw users. OpenClaw use cases for oauth providers look abusive to me. GSearch doesn't fit that pattern. Risk still exists.
+>
+> Requests carry Gemini CLI's User-Agent, ideType, and request shape, so they're probably indistinguishable from the official client on the wire _(if u a googler reading this: we good ppl, plz don't hunt us 🙏)_. If that bothers you, use a throwaway Google account.
+
+---
+
 <img src="news.png" alt="GSearch - Free Google Search MCP" style="height: 300px;" />
 
 # GSearch - Free Google Search MCP
@@ -10,11 +24,9 @@
 
 Give Claude Code, Codex CLI, Cursor, and other AI tools real-time web search powered by Google Search grounding. Single binary, zero runtime dependencies. **Free with any Google account.**
 
-> **Disclaimer:** Unofficial tool, not affiliated with Google. Uses the same public OAuth client and API as the [open-source Gemini CLI](https://github.com/google-gemini/gemini-cli). Use at your own risk.
-
 </div>
 
----
+
 
 ## Install
 
@@ -63,12 +75,13 @@ Rate limits are generous for normal usage. The server retries automatically with
 
 ## Authentication
 
-First run requires a Google sign-in. Two options:
+Three options:
 
-1. **Gemini CLI** (if installed) -GSearch reuses existing credentials from `~/.gemini/oauth_creds.json`
-2. **Interactive installer** -`./gsearch-installer` opens your browser for Google OAuth
+1. **Gemini CLI** (if installed) — GSearch reuses existing credentials from `~/.gemini/oauth_creds.json`
+2. **Interactive OAuth** — `./gsearch-installer` opens your browser for Google sign-in
+3. **API key** — paste a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey) into the installer, or set `GEMINI_API_KEY` / `GSEARCH_API_KEY` env var
 
-New accounts are auto-provisioned via the Google Code Assist API (SMS verification may be required on first use).
+OAuth modes auto-provision new accounts via the Google Code Assist API (SMS verification may be required on first use). API key mode skips OAuth entirely and hits the Gemini API directly.
 
 ## Configuration
 
