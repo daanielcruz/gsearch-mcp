@@ -1097,7 +1097,7 @@ func main() {
 
 	s := server.NewMCPServer(
 		"gsearch",
-		"1.2.0",
+		"1.2.1",
 		server.WithToolCapabilities(false),
 	)
 

@@ -2,7 +2,7 @@
   "name": "gsearch",
   "displayName": "GSearch",
   "description": "Google search with citations",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "Daniel Cruz",
     "url": "https://github.com/daanielcruz"
@@ -23,7 +23,7 @@
   "mcpServers": {
     "gsearch": {
       "command": "npx",
-      "args": ["-y", "@daanielcruz/gsearch-mcp@1.2.0"]
+      "args": ["-y", "@daanielcruz/gsearch-mcp@1.2.1"]
     }
   }
 }

@@ -1527,7 +1527,7 @@ func (m model) View() string {
 	switch m.step {
 	case stepBolt, stepDisclaimer:
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.0")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.1")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("%s\n", yellow.Render("⚠ unofficial · not affiliated with google · use at your own risk")))
@@ -1538,7 +1538,7 @@ func (m model) View() string {
 	default:
 		// header
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.0")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.1")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 
