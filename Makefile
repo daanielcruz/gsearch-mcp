@@ -5,7 +5,10 @@ BINARY_SERVER := gsearch-server
 BINARY_INSTALLER := gsearch-installer
 DIST := dist
 
-.PHONY: all build clean release install test vet
+.PHONY: all build clean release release-check release-dry-run publish install test vet
+
+RELEASE_CHANNEL ?= all
+RELEASE_FLAGS ?=
 
 all: build
 
@@ -30,25 +33,16 @@ test:
 vet:
 	go vet ./...
 
-release: clean
-	@mkdir -p $(DIST)
-	@echo "building server..."
-	GOOS=darwin  GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_SERVER)-darwin-arm64      ./cmd/server/
-	GOOS=darwin  GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_SERVER)-darwin-amd64      ./cmd/server/
-	GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_SERVER)-linux-amd64       ./cmd/server/
-	GOOS=linux   GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_SERVER)-linux-arm64       ./cmd/server/
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_SERVER)-windows-amd64.exe ./cmd/server/
-	@echo "building installer..."
-	GOOS=darwin  GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_INSTALLER)-darwin-arm64      ./cmd/installer/
-	GOOS=darwin  GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_INSTALLER)-darwin-amd64      ./cmd/installer/
-	GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_INSTALLER)-linux-amd64       ./cmd/installer/
-	GOOS=linux   GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_INSTALLER)-linux-arm64       ./cmd/installer/
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY_INSTALLER)-windows-amd64.exe ./cmd/installer/
-ifeq ($(CODESIGN),true)
-	@codesign -s - $(DIST)/$(BINARY_SERVER)-darwin-arm64
-	@codesign -s - $(DIST)/$(BINARY_SERVER)-darwin-amd64
-	@codesign -s - $(DIST)/$(BINARY_INSTALLER)-darwin-arm64
-	@codesign -s - $(DIST)/$(BINARY_INSTALLER)-darwin-amd64
-	@echo "binaries signed (ad-hoc)"
-endif
-	@echo "binaries in $(DIST)/"
+# Release never depends on clean: existing artifacts are preserved.
+release:
+	@bash scripts/release.sh build --dist "$(DIST)" $(if $(filter true,$(CODESIGN)),--codesign,) $(RELEASE_FLAGS)
+
+release-check:
+	@bash scripts/release.sh check $(RELEASE_FLAGS)
+
+release-dry-run:
+	@bash scripts/release.sh build --dry-run --dist "$(DIST)" $(RELEASE_FLAGS)
+
+# Explicit publication only; select one channel to resume a partial release.
+publish:
+	@bash scripts/release.sh publish --channel "$(RELEASE_CHANNEL)" --dist "$(DIST)" $(RELEASE_FLAGS)

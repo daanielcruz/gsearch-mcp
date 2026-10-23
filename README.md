@@ -5,12 +5,12 @@
 >
 > **This is just a heads-up. We haven't seen any bans from GSearch use.**
 >
-> Not affiliated with Google. Uses the same public OAuth client and API as the [open-source Gemini CLI](https://github.com/google-gemini/gemini-cli).
+> Not affiliated with Google. Uses the same public OAuth client and API as the [Antigravity CLI](https://antigravity.google/product/antigravity-cli).
 >
 > 
 > Google recently banned some OpenClaw users. OpenClaw use cases for oauth providers look abusive to me. GSearch doesn't fit that pattern. Risk still exists.
 >
-> Requests carry Gemini CLI's User-Agent, ideType, and request shape, so they're probably indistinguishable from the official client on the wire _(if u a googler reading this: we good ppl, plz don't hunt us 🙏)_. If that bothers you, use a throwaway Google account.
+> Requests carry Antigravity CLI's User-Agent, ideType, and request shape, matching the official client on the wire _(if u a googler reading this: we good ppl, plz don't hunt us 🙏)_. If that bothers you, use a throwaway Google account.
 
 ---
 
@@ -22,7 +22,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
 
-Give Claude Code, Codex CLI, Cursor, and other AI tools real-time web search powered by Google Search grounding. Single binary, zero runtime dependencies. **Free with any Google account.**
+Give Claude Code, Codex CLI, Cursor, Otherside, and other AI tools real-time web search powered by Google Search grounding. Single binary, zero runtime dependencies.
 
 </div>
 
@@ -41,12 +41,12 @@ git clone https://github.com/daanielcruz/gsearch-mcp && cd gsearch-mcp
 make build && ./gsearch-installer
 ```
 
-The installer downloads the binary, configures Claude Code, Codex and Cursor automatically (if available).
+The installer downloads the binary and configures Claude Code, Codex, Cursor and Otherside automatically (if available).
 
 ## How It Works
 
 ```
-Claude Code / Codex CLI / Cursor / Others...
+Claude Code / Codex CLI / Cursor / Otherside / Others
         | MCP (stdio)
    gsearch-server (Go binary)
         | OAuth2
@@ -62,26 +62,27 @@ The current time in Sao Paulo is 08:13 AM.[1][2]
 Sao Paulo observes Brasilia Time (BRT), UTC-3.[3]
 
 Sources:
-[1] Time in Sao Paulo (https://...)
-[2] World Clock (https://...)
-[3] Time Zone Info (https://...)
+[1] [Time in Sao Paulo](https://...)
+[2] [World Clock](https://...)
+[3] [Time Zone Info](https://...)
 ```
 
 ## Pricing & Limits
 
-GSearch uses the same Google Search grounding API as [Gemini CLI](https://github.com/google-gemini/gemini-cli). **Free with any Google account.** No API key, no credit card, no billing setup.
+GSearch uses the same Google Search grounding API as Antigravity CLI through its public OAuth client, or the Gemini API with an API key. Limits, availability, and billing depend on the selected authentication method and Google account.
+
+The [official Gemini CLI](https://github.com/google-gemini/gemini-cli) states that free and Google One accounts migrated to Antigravity CLI on June 18, 2026, so GSearch now signs in through Antigravity's public OAuth client. Existing Gemini CLI credentials remain readable.
 
 Rate limits are generous for normal usage. The server retries automatically with dynamic backoff on rapid bursts.
 
 ## Authentication
 
-Three options:
+Two options:
 
-1. **Gemini CLI** (if installed) — GSearch reuses existing credentials from `~/.gemini/oauth_creds.json`
-2. **Interactive OAuth** — `./gsearch-installer` opens your browser for Google sign-in
-3. **API key** — paste a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey) into the installer, or set `GEMINI_API_KEY` / `GSEARCH_API_KEY` env var
+1. **Google sign-in (Antigravity)**: the installer opens Antigravity CLI's public OAuth flow with PKCE S256 and a loopback callback on `127.0.0.1`. Credentials are stored in `~/.gsearch/oauth_creds.json`.
+2. **API key**: paste a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey) into the installer, or set `GEMINI_API_KEY` / `GSEARCH_API_KEY`. This skips OAuth and does not require a project.
 
-OAuth modes auto-provision new accounts via the Google Code Assist API (SMS verification may be required on first use). API key mode skips OAuth entirely and hits the Gemini API directly.
+Antigravity sign-in resolves the Code Assist project automatically (SMS verification may be required on first use). If the account requires a user-defined project, the installer accepts an existing Project ID and retries. It does not create projects or enable billing. The default backend is `daily-cloudcode-pa.googleapis.com`; set `GSEARCH_ANTIGRAVITY_HOST=prod` to use `cloudcode-pa.googleapis.com`.
 
 ## Configuration
 
@@ -98,7 +99,7 @@ The installer configures everything automatically. For manual setup, add to your
 }
 ```
 
-Works with Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), and any MCP-compatible tool.
+Works with Claude Code (`~/.claude.json`), Cursor (`~/.cursor/mcp.json`), Otherside (`~/.otherside/.mcp.json`), and other MCP-compatible tools.
 
 For Codex CLI (`~/.codex/config.toml`):
 

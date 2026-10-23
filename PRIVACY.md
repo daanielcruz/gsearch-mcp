@@ -2,7 +2,7 @@
 
 **GSearch - Free Google Search MCP**
 
-Last updated: March 27, 2026
+Last updated: October 23, 2026
 
 ## What GSearch does
 
@@ -14,7 +14,7 @@ GSearch does **not** collect, store, or transmit any user data to us. We have no
 
 ## What Google receives
 
-When you perform a search, your query is sent to Google's Code Assist API (`cloudcode-pa.googleapis.com`). This is the same API used by the open-source Gemini CLI. Google's own privacy policies apply to this data:
+When you perform a search through Google sign-in, your query is sent to the Code Assist API used by Antigravity CLI (`daily-cloudcode-pa.googleapis.com` by default, or `cloudcode-pa.googleapis.com` in production mode). API key searches use `generativelanguage.googleapis.com`. Google's own privacy policies apply to this data:
 
 - [Google Privacy Policy](https://policies.google.com/privacy)
 - [Google Cloud Terms](https://cloud.google.com/terms)
@@ -23,11 +23,11 @@ On the free tier, Google may use your prompts and responses to improve their AI 
 
 ## OAuth credentials
 
-GSearch stores OAuth tokens locally at `~/.gsearch/oauth_creds.json` with restricted file permissions (0600). These tokens are never sent anywhere other than Google's OAuth endpoints.
+GSearch stores OAuth tokens locally at `~/.gsearch/oauth_creds.json` with restricted file permissions (0600). Access tokens authenticate requests to Google's Code Assist API; refresh tokens are sent only to Google's OAuth token endpoint.
 
 ## Third parties
 
-GSearch has no third-party integrations, ads, or tracking. The only external communication is with Google's APIs for authentication and search.
+GSearch has no third-party integrations, ads, or tracking. It communicates with Google's APIs for authentication and search. To replace Google's redirect URLs in citations, it may send a `HEAD` request only to Google-owned redirect hosts; it does not contact the destination source automatically.
 
 ## Contact
 

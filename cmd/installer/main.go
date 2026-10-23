@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
+	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -38,16 +37,32 @@ var (
 	subtle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
 )
 
-// ─── oauth constants ───
+// ─── oauth + antigravity constants ───
 
 const (
-	oauthClientID     = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-	oauthClientSecret = "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"
+	oauthClientID     = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+	oauthClientSecret = "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"
+	oauthAuthURL      = "https://accounts.google.com/o/oauth2/auth"
 	oauthTokenURL     = "https://oauth2.googleapis.com/token"
-	oauthAuthURL      = "https://accounts.google.com/o/oauth2/v2/auth"
-	oauthScopes       = "openid email profile https://www.googleapis.com/auth/cloud-platform"
-	codeAssistURL     = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	oauthUserinfoURL  = "https://www.googleapis.com/oauth2/v2/userinfo"
+	oauthScopes       = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/aicode https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
+	credsProvider     = "antigravity"
 )
+
+func codeAssistBaseURL() string {
+	if os.Getenv("GSEARCH_ANTIGRAVITY_HOST") == "prod" {
+		return "https://cloudcode-pa.googleapis.com/v1internal"
+	}
+	return "https://daily-cloudcode-pa.googleapis.com/v1internal"
+}
+
+func antigravityUserAgent() string {
+	arch := "amd64"
+	if runtime.GOARCH == "arm64" {
+		arch = "arm64"
+	}
+	return fmt.Sprintf("antigravity/cli/1.4.6 (aidev_client; os_type=%s; arch=%s; cl=1005129088; auth_method=consumer)", runtime.GOOS, arch)
+}
 
 // ─── steps ───
 
@@ -87,33 +102,36 @@ type model struct {
 	scopeProject bool
 	scopeCursor  int
 	// auth
-	authCursor   int    // 0=gemini, 1=fresh, 2=apikey
-	geminiFound  bool
-	geminiEmail  string
-	authWaiting  bool   // waiting for browser callback
-	authURL      string // OAuth URL to show user
-	urlCopied    bool
-	pasteInput   textinput.Model
-	pasteMode    bool
-	pasteError   string
-	account      string
-	accessToken  string
-	useAPIKey    bool
-	apiKeyInput  textinput.Model
-	apiKeyMode   bool
+	authCursor  int    // 0=Login Google (Antigravity), 1=API key
+	authWaiting bool   // waiting for browser callback
+	authURL     string // OAuth URL to show user
+	urlCopied   bool
+	pasteInput  textinput.Model
+	pasteMode   bool
+	pasteError  string
+	account     string
+	accessToken string
+	useAPIKey   bool
+	apiKeyInput textinput.Model
+	apiKeyMode  bool
 	// project + wire
-	verifyURL   string
-	project     string
-	wireActions []string
+	verifyURL        string
+	project          string
+	projectInput     textinput.Model
+	projectInputMode bool
+	projectError     string
+	projectTier      string
+	installed        bool
+	wireActions      []string
 	// test results
 	testSources int
 	testChars   int
 	testElapsed float64
 	testText    string
 	// misc
-	err      error
-	width    int
-	height   int
+	err    error
+	width  int
+	height int
 }
 
 func initialModel() model {
@@ -121,10 +139,14 @@ func initialModel() model {
 	ti.Placeholder = "paste callback URL here..."
 	ti.CharLimit = 2000
 	ti.Width = 80
+	projectInput := textinput.New()
+	projectInput.Placeholder = "Project ID do Google Cloud"
+	projectInput.Width = 60
 	return model{
-		step:       stepBolt,
-		scopeUser:  true,
-		pasteInput: ti,
+		step:         stepBolt,
+		scopeUser:    true,
+		pasteInput:   ti,
+		projectInput: projectInput,
 	}
 }
 
@@ -132,11 +154,6 @@ func initialModel() model {
 
 type scanDoneMsg struct {
 	targets []target
-}
-
-type authCheckMsg struct {
-	found bool
-	email string
 }
 
 type authDoneMsg struct {
@@ -150,6 +167,10 @@ type authURLMsg struct {
 
 type projectDoneMsg struct {
 	project string
+}
+
+type projectNeededMsg struct {
+	tierID string
 }
 
 type verifyNeededMsg struct {
@@ -173,28 +194,12 @@ type oauthCreds struct {
 	RefreshToken string `json:"refresh_token"`
 	ExpiryDate   int64  `json:"expiry_date"`
 	IDToken      string `json:"id_token"`
-}
-
-func geminiCredsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".gemini", "oauth_creds.json")
+	Provider     string `json:"provider,omitempty"`
 }
 
 func gsearchCredsPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".gsearch", "oauth_creds.json")
-}
-
-func loadGeminiCreds() (*oauthCreds, error) {
-	data, err := os.ReadFile(geminiCredsPath())
-	if err != nil {
-		return nil, err
-	}
-	var c oauthCreds
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, err
-	}
-	return &c, nil
 }
 
 func saveCreds(path string, c *oauthCreds) error {
@@ -207,48 +212,6 @@ func saveCreds(path string, c *oauthCreds) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
-}
-
-func isExpired(c *oauthCreds) bool {
-	return time.Now().UnixMilli() > c.ExpiryDate-60000
-}
-
-func refreshToken(c *oauthCreds) error {
-	form := url.Values{
-		"client_id":     {oauthClientID},
-		"client_secret": {oauthClientSecret},
-		"refresh_token": {c.RefreshToken},
-		"grant_type":    {"refresh_token"},
-	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.PostForm(oauthTokenURL, form)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("token refresh HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 200))
-	}
-	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
-		return err
-	}
-	if tok, ok := result["access_token"].(string); ok {
-		c.AccessToken = tok
-	} else {
-		return fmt.Errorf("no access_token in refresh response")
-	}
-	if exp, ok := result["expires_in"].(float64); ok {
-		c.ExpiryDate = time.Now().UnixMilli() + int64(exp)*1000
-	}
-	if rt, ok := result["refresh_token"].(string); ok {
-		c.RefreshToken = rt
-	}
-	if idt, ok := result["id_token"].(string); ok {
-		c.IDToken = idt
-	}
-	return nil
 }
 
 func emailFromCreds(c *oauthCreds) string {
@@ -269,21 +232,35 @@ func emailFromCreds(c *oauthCreds) string {
 	return ""
 }
 
+// ─── code assist project lookup ───
+
+func projectFromEnv() string {
+	for _, key := range []string{"GSEARCH_PROJECT", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"} {
+		if project := os.Getenv(key); project != "" {
+			return project
+		}
+	}
+	return ""
+}
+
 func fetchProjectID(accessToken string) (string, error) {
+	if project := projectFromEnv(); project != "" {
+		return project, nil
+	}
+	return loadCodeAssistProject(accessToken)
+}
+
+func loadCodeAssistProject(accessToken string) (string, error) {
 	loadReq, _ := json.Marshal(map[string]any{
-		"cloudaicompanionProject": "",
-		"metadata": map[string]any{
-			"ideType":    "GEMINI_CLI",
-			"platform":   "PLATFORM_UNSPECIFIED",
-			"pluginType": "GEMINI",
-		},
+		"metadata": map[string]any{"ideType": "ANTIGRAVITY"},
 	})
-	req, err := http.NewRequest("POST", codeAssistURL, bytes.NewReader(loadReq))
+	req, err := http.NewRequest("POST", codeAssistBaseURL()+":loadCodeAssist", bytes.NewReader(loadReq))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", antigravityUserAgent())
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
@@ -291,7 +268,10 @@ func fetchProjectID(accessToken string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read loadCodeAssist response: %w", err)
+	}
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("API %d: %s", resp.StatusCode, string(respBody))
@@ -312,16 +292,16 @@ func fetchProjectID(accessToken string) (string, error) {
 		return "", &validationError{url: vURL}
 	}
 
-	// find default tier from allowedTiers (mirrors Gemini CLI)
+	// find default tier from allowedTiers
 	tier := getDefaultTier(result)
 	if tier == nil {
-		return "", fmt.Errorf("no eligible tier — set GSEARCH_PROJECT env var")
+		return "", fmt.Errorf("nenhum tier elegível; defina GSEARCH_PROJECT")
 	}
 
 	tierID, _ := tier["id"].(string)
 	needsProject, _ := tier["userDefinedCloudaicompanionProject"].(bool)
 	if needsProject {
-		return "", fmt.Errorf("this account requires GSEARCH_PROJECT or GOOGLE_CLOUD_PROJECT env var (tier: %s)", tierID)
+		return "", &projectRequiredError{tierID: tierID}
 	}
 
 	id, err := onboardUser(accessToken, tierID)
@@ -350,22 +330,18 @@ func getDefaultTier(result map[string]any) map[string]any {
 }
 
 func onboardUser(accessToken, tierID string) (string, error) {
-	reqBody := map[string]any{
-		"tierId": tierID,
-		"metadata": map[string]any{
-			"ideType":    "IDE_UNSPECIFIED",
-			"platform":   "PLATFORM_UNSPECIFIED",
-			"pluginType": "GEMINI",
-		},
-	}
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, _ := json.Marshal(map[string]any{
+		"tierId":   tierID,
+		"metadata": map[string]any{"ideType": "ANTIGRAVITY"},
+	})
 
-	req, err := http.NewRequest("POST", "https://cloudcode-pa.googleapis.com/v1internal:onboardUser", bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest("POST", codeAssistBaseURL()+":onboardUser", bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", antigravityUserAgent())
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -373,16 +349,24 @@ func onboardUser(accessToken, tierID string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read onboardUser response: %w", err)
+	}
 
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("onboardUser %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result map[string]any
-	json.Unmarshal(respBody, &result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parse onboardUser response: %w", err)
+	}
 
-	// response is an async operation — poll for completion
+	if id, done, err := operationProjectID(result); done || err != nil {
+		return id, err
+	}
+
 	opName, _ := result["name"].(string)
 	if opName == "" {
 		return "", fmt.Errorf("no operation name in onboardUser response")
@@ -392,37 +376,63 @@ func onboardUser(accessToken, tierID string) (string, error) {
 }
 
 func pollOperation(accessToken, opName string) (string, error) {
-	opURL := "https://cloudcode-pa.googleapis.com/v1internal/" + opName
+	opURL := codeAssistBaseURL() + "/" + opName
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	for i := 0; i < 20; i++ {
 		req, _ := http.NewRequest("GET", opURL, nil)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", antigravityUserAgent())
 
 		resp, err := client.Do(req)
 		if err != nil {
 			return "", err
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("read operation response: %w", err)
+		}
+		if resp.StatusCode != 200 {
+			return "", fmt.Errorf("operation HTTP %d: %s", resp.StatusCode, string(body))
+		}
 
 		var result map[string]any
-		json.Unmarshal(body, &result)
-
-		if done, _ := result["done"].(bool); done {
-			response, _ := result["response"].(map[string]any)
-			project, _ := response["cloudaicompanionProject"].(map[string]any)
-			if id, _ := project["id"].(string); id != "" {
-				return id, nil
-			}
-			return "", fmt.Errorf("onboarding completed but no project ID in response")
+		if err := json.Unmarshal(body, &result); err != nil {
+			return "", fmt.Errorf("parse operation response: %w", err)
+		}
+		if id, done, err := operationProjectID(result); done || err != nil {
+			return id, err
 		}
 
 		time.Sleep(2 * time.Second)
 	}
 
-	return "", fmt.Errorf("onboarding timeout — operation did not complete")
+	return "", fmt.Errorf("tempo limite do onboarding esgotado")
+}
+
+func operationProjectID(result map[string]any) (string, bool, error) {
+	if opErr, ok := result["error"].(map[string]any); ok {
+		return "", false, fmt.Errorf("operation error (code %v): %v", opErr["code"], opErr["message"])
+	}
+	if done, _ := result["done"].(bool); !done {
+		return "", false, nil
+	}
+	response, _ := result["response"].(map[string]any)
+	project, _ := response["cloudaicompanionProject"].(map[string]any)
+	if id, _ := project["id"].(string); id != "" {
+		return id, true, nil
+	}
+	return "", true, fmt.Errorf("onboarding completed but no project ID in response")
+}
+
+type projectRequiredError struct {
+	tierID string
+}
+
+func (e *projectRequiredError) Error() string {
+	return fmt.Sprintf("esta conta exige o env GSEARCH_PROJECT ou GOOGLE_CLOUD_PROJECT (tier: %s)", e.tierID)
 }
 
 type validationError struct {
@@ -449,7 +459,7 @@ func extractValidationURL(result map[string]any) string {
 	return ""
 }
 
-// ─── fresh oauth flow ───
+// ─── antigravity oauth flow ───
 
 func serverBinaryName() string {
 	if runtime.GOOS == "windows" {
@@ -459,9 +469,35 @@ func serverBinaryName() string {
 }
 
 func randomState() string {
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	rand.Read(b)
-	return hex.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func randomVerifier() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func pkceChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func buildAuthURL(redirectURI, state, challenge string) string {
+	q := url.Values{
+		"client_id":             {oauthClientID},
+		"redirect_uri":          {redirectURI},
+		"response_type":         {"code"},
+		"scope":                 {oauthScopes},
+		"state":                 {state},
+		"access_type":           {"offline"},
+		"prompt":                {"consent"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	return oauthAuthURL + "?" + q.Encode()
 }
 
 func copyToClipboardCmd(text string) tea.Cmd {
@@ -499,42 +535,55 @@ func openBrowser(url string) error {
 
 // oauthState holds the state for a running OAuth flow so the wait command can use it
 var oauthState struct {
-	codeCh chan string
-	errCh  chan error
-	srv    *http.Server
-	url    string
+	codeCh      chan string
+	errCh       chan error
+	srv         *http.Server
+	url         string
+	state       string
+	verifier    string
+	redirectURI string
 }
 
-func freshOAuthStart() tea.Msg {
-	// find free port
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func listenLoopback() (net.Listener, error) {
+	for port := 54565; port <= 54628; port++ {
+		if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+			return l, nil
+		}
+	}
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+func startCallbackServer() error {
+	listener, err := listenLoopback()
 	if err != nil {
-		return errMsg{fmt.Errorf("cannot start local server: %w", err)}
+		return fmt.Errorf("cannot start local server: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
 	state := randomState()
+	verifier := randomVerifier()
 	oauthState.codeCh = make(chan string, 1)
 	oauthState.errCh = make(chan error, 1)
+	oauthState.state = state
+	oauthState.verifier = verifier
+	oauthState.redirectURI = fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 
-	// local http server for callback
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			oauthState.errCh <- fmt.Errorf("state mismatch")
-			fmt.Fprintf(w, "<html><body><h2>error: state mismatch</h2></body></html>")
+		q := r.URL.Query()
+		if q.Get("state") != oauthState.state {
+			http.Error(w, "state mismatch", http.StatusUnauthorized)
 			return
 		}
-		if errStr := r.URL.Query().Get("error"); errStr != "" {
+		if errStr := q.Get("error"); errStr != "" {
 			oauthState.errCh <- fmt.Errorf("oauth error: %s", errStr)
-			fmt.Fprintf(w, "<html><body><h2>error: %s</h2></body></html>", html.EscapeString(errStr))
+			http.Error(w, errStr, http.StatusBadRequest)
 			return
 		}
-		code := r.URL.Query().Get("code")
+		code := q.Get("code")
 		if code == "" {
 			oauthState.errCh <- fmt.Errorf("no code in callback")
-			fmt.Fprintf(w, "<html><body><h2>error: no authorization code</h2></body></html>")
+			http.Error(w, "no authorization code", http.StatusBadRequest)
 			return
 		}
 		fmt.Fprintf(w, "<html><body style='font-family:system-ui;text-align:center;padding:60px'><h2>✓ authenticated</h2><p style='color:#888'>you can close this tab</p></body></html>")
@@ -547,14 +596,14 @@ func freshOAuthStart() tea.Msg {
 	oauthState.srv = &http.Server{Handler: mux}
 	go oauthState.srv.Serve(listener)
 
-	// build auth URL
-	oauthState.url = fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&state=%s&access_type=offline&prompt=consent",
-		oauthAuthURL,
-		url.QueryEscape(oauthClientID),
-		url.QueryEscape(redirectURI),
-		url.QueryEscape(oauthScopes),
-		url.QueryEscape(state),
-	)
+	oauthState.url = buildAuthURL(oauthState.redirectURI, state, pkceChallenge(verifier))
+	return nil
+}
+
+func freshOAuthStart() tea.Msg {
+	if err := startCallbackServer(); err != nil {
+		return errMsg{err}
+	}
 
 	// try to open browser (best-effort)
 	openBrowser(oauthState.url)
@@ -563,35 +612,30 @@ func freshOAuthStart() tea.Msg {
 }
 
 func freshOAuthWait() tea.Msg {
-	redirectURI := ""
-	// extract redirect_uri from the stored URL
-	if u, err := url.Parse(oauthState.url); err == nil {
-		redirectURI = u.Query().Get("redirect_uri")
-	}
-
-	// wait for callback (timeout 3 min)
+	// wait for callback (timeout)
 	var code string
 	select {
 	case code = <-oauthState.codeCh:
 	case err := <-oauthState.errCh:
 		oauthState.srv.Shutdown(context.Background())
 		return errMsg{err}
-	case <-time.After(60 * time.Second):
+	case <-time.After(5 * time.Minute):
 		oauthState.srv.Shutdown(context.Background())
-		return errMsg{fmt.Errorf("oauth timeout - use 'v' to paste the callback URL manually")}
+		return errMsg{fmt.Errorf("Tempo do login esgotado. Inicie o instalador novamente para gerar uma nova autorização.")}
 	}
 
 	oauthState.srv.Shutdown(context.Background())
-	return exchangeToken(code, redirectURI)
+	return exchangeToken(code, oauthState.redirectURI, oauthState.verifier)
 }
 
-func exchangeToken(code, redirectURI string) tea.Msg {
+func exchangeToken(code, redirectURI, verifier string) tea.Msg {
 	form := url.Values{
 		"client_id":     {oauthClientID},
 		"client_secret": {oauthClientSecret},
 		"code":          {code},
 		"grant_type":    {"authorization_code"},
 		"redirect_uri":  {redirectURI},
+		"code_verifier": {verifier},
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -615,7 +659,7 @@ func exchangeToken(code, redirectURI string) tea.Msg {
 		return errMsg{fmt.Errorf("token error: %s", errStr)}
 	}
 
-	creds := &oauthCreds{}
+	creds := &oauthCreds{Provider: credsProvider}
 	if tok, ok := result["access_token"].(string); ok {
 		creds.AccessToken = tok
 	}
@@ -629,15 +673,46 @@ func exchangeToken(code, redirectURI string) tea.Msg {
 		creds.ExpiryDate = time.Now().UnixMilli() + int64(exp)*1000
 	}
 
+	if creds.RefreshToken == "" {
+		return errMsg{fmt.Errorf("resposta do Google sem refresh_token; não é possível renovar o acesso")}
+	}
+
 	if err := saveCreds(gsearchCredsPath(), creds); err != nil {
 		return errMsg{fmt.Errorf("cannot save credentials: %w", err)}
 	}
 
 	email := emailFromCreds(creds)
 	if email == "" {
-		email = "google account"
+		email = fetchUserinfoEmail(creds.AccessToken)
+	}
+	if email == "" {
+		email = "Conta Google"
 	}
 	return authDoneMsg{account: email, accessToken: creds.AccessToken}
+}
+
+func fetchUserinfoEmail(accessToken string) string {
+	req, err := http.NewRequest("GET", oauthUserinfoURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
+	}
+	var result map[string]any
+	if json.Unmarshal(body, &result) != nil {
+		return ""
+	}
+	email, _ := result["email"].(string)
+	return email
 }
 
 // ─── commands ───
@@ -678,44 +753,34 @@ func scanCmd() tea.Msg {
 		}
 	}
 
+	otherside := target{name: "otherside"}
+	if _, err := exec.LookPath("otherside"); err == nil {
+		if out, err := exec.Command("otherside", "--version").Output(); err == nil {
+			otherside.version = strings.TrimPrefix(strings.TrimSpace(string(out)), "otherside ")
+			otherside.enabled = true
+		}
+	}
+	targets = append(targets, otherside)
+
 	return scanDoneMsg{targets: targets}
 }
 
-func authCheckCmd() tea.Msg {
-	creds, err := loadGeminiCreds()
-	if err != nil {
-		return authCheckMsg{found: false}
-	}
-	email := emailFromCreds(creds)
-	return authCheckMsg{found: true, email: email}
-}
-
-func geminiAuthCmd() tea.Msg {
-	creds, err := loadGeminiCreds()
-	if err != nil {
-		return errMsg{fmt.Errorf("cannot read Gemini credentials: %w", err)}
-	}
-	if isExpired(creds) {
-		if err := refreshToken(creds); err != nil {
-			return errMsg{fmt.Errorf("token refresh failed: %w", err)}
-		}
-		if err := saveCreds(geminiCredsPath(), creds); err != nil {
-			return errMsg{fmt.Errorf("cannot save refreshed token: %w", err)}
-		}
-	}
-	// copy to ~/.gsearch/ so server works even if Gemini CLI is uninstalled
-	saveCreds(gsearchCredsPath(), creds)
-	email := emailFromCreds(creds)
-	if email == "" {
-		email = "google account"
-	}
-	return authDoneMsg{account: email, accessToken: creds.AccessToken}
-}
-
 func projectCmd(accessToken string) tea.Cmd {
+	return projectLookupCmd(accessToken, "")
+}
+
+func projectLookupCmd(accessToken, projectID string) tea.Cmd {
 	return func() tea.Msg {
+		// manual project is a config value only; no onboarding call is made
+		if projectID != "" {
+			return projectDoneMsg{project: projectID}
+		}
 		id, err := fetchProjectID(accessToken)
 		if err != nil {
+			var pe *projectRequiredError
+			if errors.As(err, &pe) {
+				return projectNeededMsg{tierID: pe.tierID}
+			}
 			var ve *validationError
 			if errors.As(err, &ve) {
 				return verifyNeededMsg{url: ve.url}
@@ -728,22 +793,30 @@ func projectCmd(accessToken string) tea.Cmd {
 
 func verifyWaitCmd(accessToken string) tea.Cmd {
 	return func() tea.Msg {
-		// poll every 3s for up to 3 minutes
 		for i := 0; i < 60; i++ {
 			time.Sleep(3 * time.Second)
-			id, err := fetchProjectID(accessToken)
-			if err == nil && id != "" {
-				return projectDoneMsg{project: id}
+			msg := projectLookupCmd(accessToken, "")()
+			if _, ok := msg.(verifyNeededMsg); ok {
+				continue
 			}
-			var ve *validationError
-			if errors.As(err, &ve) {
-				continue // still needs verification
-			}
-			if err != nil {
-				return errMsg{fmt.Errorf("project lookup failed: %w", err)}
-			}
+			return msg
 		}
-		return errMsg{fmt.Errorf("verification timeout — complete the verification in your browser and try again")}
+		return errMsg{err: fmt.Errorf("Tempo de verificação esgotado. Conclua a verificação e tente novamente.")}
+	}
+}
+
+func installerConfig(m model) map[string]any {
+	if m.useAPIKey {
+		return map[string]any{
+			"auth_type":    "api-key",
+			"api_key":      m.accessToken,
+			"installed_at": time.Now().Format(time.RFC3339),
+		}
+	}
+	return map[string]any{
+		"auth_type":    "oauth",
+		"project":      m.project,
+		"installed_at": time.Now().Format(time.RFC3339),
 	}
 }
 
@@ -754,20 +827,7 @@ func installCmd(m model) tea.Cmd {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return errMsg{err}
 		}
-		var cfg map[string]any
-		if m.useAPIKey {
-			cfg = map[string]any{
-				"auth_type":    "api-key",
-				"api_key":      m.accessToken,
-				"installed_at": time.Now().Format(time.RFC3339),
-			}
-		} else {
-			cfg = map[string]any{
-				"auth_type":    "oauth",
-				"project":      m.project,
-				"installed_at": time.Now().Format(time.RFC3339),
-			}
-		}
+		cfg := installerConfig(m)
 		data, _ := json.MarshalIndent(cfg, "", "  ")
 		if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0600); err != nil {
 			return errMsg{err}
@@ -796,6 +856,22 @@ func installCmd(m model) tea.Cmd {
 
 		return installDoneMsg{}
 	}
+}
+
+func resolveOthersideMCPPath(home, goos string) string {
+	root := os.Getenv("OTHERSIDE_CONFIG_DIR")
+	if root == "" {
+		if goos == "windows" {
+			appData := os.Getenv("APPDATA")
+			if appData == "" {
+				appData = filepath.Join(home, "AppData", "Roaming")
+			}
+			root = filepath.Join(appData, "Otherside")
+		} else {
+			root = filepath.Join(home, ".otherside")
+		}
+	}
+	return filepath.Join(root, ".mcp.json")
 }
 
 func wireCmd(targets []target, scopeUser, scopeProject bool, project string) tea.Cmd {
@@ -845,6 +921,13 @@ func wireCmd(targets []target, scopeUser, scopeProject bool, project string) tea
 					return errMsg{fmt.Errorf("codex wire: %w", err)}
 				}
 				actions = append(actions, "codex-cli|edited ~/.codex/config.toml → added mcp_servers.gsearch")
+
+			case "otherside":
+				p := resolveOthersideMCPPath(home, runtime.GOOS)
+				if err := injectMCPServer(p, "gsearch", mcpEntry); err != nil {
+					return errMsg{fmt.Errorf("Otherside: %w", err)}
+				}
+				actions = append(actions, "otherside|configurado "+p)
 
 			case "standalone (.mcp.json)":
 				if err := injectMCPServer(".mcp.json", "gsearch", mcpEntry); err != nil {
@@ -919,6 +1002,9 @@ func injectMCPServer(configPath, serverName string, entry map[string]any) error 
 	} else {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return fmt.Errorf("parse %s: %w", configPath, err)
+		}
+		if cfg == nil {
+			cfg = map[string]any{}
 		}
 	}
 
@@ -1096,6 +1182,35 @@ func (m model) Init() tea.Cmd {
 // ─── update ───
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.step == stepProject && m.projectInputMode {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if keyMsg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			switch keyMsg.String() {
+			case "esc":
+				m.projectInputMode = false
+				m.projectInput.Blur()
+				m.projectError = ""
+				m.step = stepAuthChoice
+				return m, nil
+			case "enter":
+				projectID := strings.TrimSpace(m.projectInput.Value())
+				if projectID == "" || strings.Trim(projectID, "0123456789") == "" {
+					m.projectError = "Informe o Project ID, não o número do projeto."
+					return m, nil
+				}
+				m.projectInput.SetValue(projectID)
+				m.projectError = ""
+				return m, projectLookupCmd(m.accessToken, projectID)
+			}
+		}
+		if _, ok := msg.(tea.KeyMsg); ok {
+			var cmd tea.Cmd
+			m.projectInput, cmd = m.projectInput.Update(msg)
+			return m, cmd
+		}
+	}
 	if m.pasteMode {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
@@ -1109,18 +1224,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				pasted := m.pasteInput.Value()
-				m.pasteMode = false
-				m.urlCopied = false
-				m.pasteInput.Blur()
-				m.pasteInput.Reset()
 				m.pasteError = ""
 				if pasted == "" {
 					m.pasteError = "no URL pasted"
 					return m, nil
 				}
+				if oauthState.codeCh == nil {
+					m.pasteError = "auth flow not started"
+					return m, nil
+				}
 				parsed, err := url.Parse(pasted)
 				if err != nil {
 					m.pasteError = "invalid URL"
+					return m, nil
+				}
+				if parsed.Query().Get("state") != oauthState.state {
+					m.pasteError = "state divergente no callback"
 					return m, nil
 				}
 				code := parsed.Query().Get("code")
@@ -1132,20 +1251,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pasteError = fmt.Sprintf("no 'code' in URL (params: %s)", enc)
 					return m, nil
 				}
-				m.pasteError = ""
-				if oauthState.codeCh == nil {
-					m.pasteError = "auth flow not started"
-					return m, nil
+				m.pasteMode = false
+				m.urlCopied = false
+				m.pasteInput.Blur()
+				m.pasteInput.Reset()
+				select {
+				case oauthState.codeCh <- code:
+				default:
 				}
-				// send code and exchange tokens directly
-				oauthState.srv.Shutdown(context.Background())
-				return m, func() tea.Msg {
-					redirectURI := ""
-					if u, err := url.Parse(oauthState.url); err == nil {
-						redirectURI = u.Query().Get("redirect_uri")
-					}
-					return exchangeToken(code, redirectURI)
-				}
+				return m, nil
 			}
 		}
 		var cmd tea.Cmd
@@ -1260,11 +1374,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scopeUser = false
 				m.scopeProject = true
 			}
-			maxAuth := 1
-			if m.geminiFound {
-				maxAuth = 2
-			}
-			if m.step == stepAuthChoice && m.authCursor < maxAuth {
+			if m.step == stepAuthChoice && m.authCursor < 1 {
 				m.authCursor++
 			}
 
@@ -1293,30 +1403,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.step = stepScope
 					return m, nil
 				}
-				// skip scope — go straight to auth
 				m.step = stepAuthChoice
-				return m, func() tea.Msg { return authCheckCmd() }
+				return m, nil
 
 			case stepScope:
 				m.step = stepAuthChoice
-				return m, func() tea.Msg { return authCheckCmd() }
+				return m, nil
 
 			case stepAuthChoice:
-				lastOpt := m.authCursor
-				if !m.geminiFound {
-					lastOpt++ // shift indices when gemini not found
-				}
-				switch lastOpt {
+				switch m.authCursor {
 				case 0:
-					// use gemini token
-					m.step = stepAuth
-					return m, func() tea.Msg { return geminiAuthCmd() }
-				case 1:
-					// fresh oauth
+					// Login Google (Antigravity)
 					m.step = stepAuth
 					m.authWaiting = true
 					return m, func() tea.Msg { return freshOAuthStart() }
-				case 2:
+				case 1:
 					// API key
 					m.step = stepAuth
 					m.apiKeyMode = true
@@ -1346,14 +1447,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.step = stepTargets
 		return m, nil
 
-	case authCheckMsg:
-		m.geminiFound = msg.found
-		m.geminiEmail = msg.email
-		if !msg.found {
-			m.authCursor = 0 // only option is fresh login
-		}
-		return m, nil
-
 	case authURLMsg:
 		m.authURL = msg.url
 		m.authWaiting = true
@@ -1365,8 +1458,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authWaiting = false
 		m.account = msg.account
 		m.accessToken = msg.accessToken
+		m.projectInputMode = false
 		m.step = stepProject
 		return m, projectCmd(m.accessToken)
+
+	case projectNeededMsg:
+		m.step = stepProject
+		m.projectInputMode = true
+		m.projectTier = msg.tierID
+		m.projectError = ""
+		return m, m.projectInput.Focus()
 
 	case verifyNeededMsg:
 		m.step = stepVerify
@@ -1376,10 +1477,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectDoneMsg:
 		m.project = msg.project
+		m.projectInputMode = false
+		m.projectInput.Blur()
 		m.step = stepInstall
 		return m, installCmd(m)
 
 	case installDoneMsg:
+		m.installed = true
 		m.step = stepWire
 		return m, wireCmd(m.targets, m.scopeUser, m.scopeProject, m.project)
 
@@ -1407,6 +1511,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.step == stepProject && m.projectInputMode {
+		var cmd tea.Cmd
+		m.projectInput, cmd = m.projectInput.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -1418,8 +1527,8 @@ func (m model) View() string {
 	switch m.step {
 	case stepBolt, stepDisclaimer:
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.1.0")))
-		b.WriteString(fmt.Sprintf("%s\n", dim.Render("free google search for ai cli tools")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.0")))
+		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("%s\n", yellow.Render("⚠ unofficial · not affiliated with google · use at your own risk")))
 		b.WriteString("\n")
@@ -1429,8 +1538,8 @@ func (m model) View() string {
 	default:
 		// header
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.1.0")))
-		b.WriteString(fmt.Sprintf("%s\n", dim.Render("free google search for ai cli tools")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.0")))
+		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 
 		// scan
@@ -1493,21 +1602,15 @@ func (m model) View() string {
 
 		// auth choice
 		if m.step == stepAuthChoice {
-			b.WriteString(logLine("auth", "select authentication:", false))
+			b.WriteString(logLine("auth", "escolha a autenticação:", false))
 			type authOpt struct {
 				label string
 				hint  string
 			}
-			var opts []authOpt
-			if m.geminiFound {
-				hint := "reuse OAuth creds found at ~/.gemini/oauth_creds.json"
-				if m.geminiEmail != "" {
-					hint = "reuse " + m.geminiEmail + " found at ~/.gemini/oauth_creds.json"
-				}
-				opts = append(opts, authOpt{"gemini-cli OAuth", hint})
+			opts := []authOpt{
+				{"Login Google (Antigravity)", "OAuth pelo navegador com sua conta Google"},
+				{"API key", "cole uma API key do Google AI Studio"},
 			}
-			opts = append(opts, authOpt{"google login", "fresh OAuth via browser"})
-			opts = append(opts, authOpt{"API key", "paste Gemini API key"})
 
 			for i, o := range opts {
 				cur := "  "
@@ -1533,7 +1636,7 @@ func (m model) View() string {
 
 		// auth waiting
 		if m.step == stepAuth && m.authWaiting {
-			b.WriteString(logLine("auth", "sign in with your Google account", false))
+			b.WriteString(logLine("auth", "faça login com sua conta Google (Antigravity)", false))
 			if m.authURL != "" {
 				lineWidth := m.width - 4
 				if lineWidth < 40 {
@@ -1566,12 +1669,25 @@ func (m model) View() string {
 
 		// verify
 		if m.step == stepVerify {
-			b.WriteString(logLine("auth", "account verification required", false))
-			b.WriteString(logAction(yellow.Render("complete SMS/phone verification in your browser")))
+			b.WriteString(logLine("auth", "verificação de conta necessária", false))
+			b.WriteString(logAction(yellow.Render("conclua a verificação por SMS/telefone no navegador")))
 			if m.verifyURL != "" {
 				b.WriteString(logAction(dim.Render(m.verifyURL)))
 			}
-			b.WriteString(logAction(subtle.Render("waiting for verification...")))
+			b.WriteString(logAction(subtle.Render("aguardando verificação...")))
+		}
+
+		if m.step == stepProject && m.projectInputMode {
+			b.WriteString(logLine("auth", "Esta conta exige um Project ID do Google Cloud.", false))
+			b.WriteString(logAction("O valor informado fica salvo apenas em ~/.gsearch/config.json."))
+			b.WriteString(logAction("Use o Project ID existente da conta, não o número do projeto."))
+			b.WriteString(logAction("Não criamos projetos nem ativamos billing. Limites e custos dependem da sua conta."))
+			b.WriteString(logAction("Tier informado pela API: " + m.projectTier))
+			b.WriteString(logAction(m.projectInput.View()))
+			if m.projectError != "" {
+				b.WriteString(logAction(red.Render(m.projectError)))
+			}
+			b.WriteString(logAction("enter: usar este Project ID · esc: voltar à autenticação"))
 		}
 
 		// project
@@ -1581,10 +1697,12 @@ func (m model) View() string {
 		}
 
 		// install
-		if m.step > stepProject {
+		if m.installed {
 			b.WriteString(logLine("inst", "installed gsearch-mcp", true))
 			b.WriteString(logAction(dim.Render("copied server binary to ~/.gsearch/")))
-			b.WriteString(logAction(dim.Render("copied oauth credentials to ~/.gsearch/")))
+			if !m.useAPIKey {
+				b.WriteString(logAction(dim.Render("credenciais OAuth em ~/.gsearch/oauth_creds.json")))
+			}
 			b.WriteString(logAction(dim.Render("created ~/.gsearch/config.json")))
 		}
 
