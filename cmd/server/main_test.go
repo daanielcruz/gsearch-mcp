@@ -40,16 +40,16 @@ func isolateServer(t *testing.T) {
 	}
 	previousCreds, previousProject, previousKey := cachedCreds, cachedProject, apiKey
 	previousModels, previousSession := models, cachedSessionID
-	previousConfigured, previousConfiguredProject := modelsConfigured, configuredProject
+	previousConfigured, previousConfiguredProject, previousAuthType := modelsConfigured, configuredProject, configuredAuthType
 	previousSem, previousCooldown := apiSem, cooldownUntil
 	cachedCreds, cachedProject, apiKey = nil, "", ""
 	models, cachedSessionID = []string{defaultModel, fallbackModel}, "fake-session"
-	modelsConfigured, configuredProject = false, ""
+	modelsConfigured, configuredProject, configuredAuthType = false, "", ""
 	apiSem, cooldownUntil = make(chan struct{}, 1), time.Time{}
 	t.Cleanup(func() {
 		cachedCreds, cachedProject, apiKey = previousCreds, previousProject, previousKey
 		models, cachedSessionID = previousModels, previousSession
-		modelsConfigured, configuredProject = previousConfigured, previousConfiguredProject
+		modelsConfigured, configuredProject, configuredAuthType = previousConfigured, previousConfiguredProject, previousAuthType
 		apiSem, cooldownUntil = previousSem, previousCooldown
 	})
 	mockTransport(t, func(req *http.Request) (*http.Response, error) {
@@ -1242,6 +1242,33 @@ func TestSourceURLResolution(t *testing.T) {
 			t.Fatalf("requests = %d, want 0", requests)
 		}
 	})
+}
+
+func TestResolveAPIKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, authType, configKey, gemini, gsearch, want string
+		oauthCreds                                       bool
+	}{
+		{"OAuth install ignores GEMINI_API_KEY", "oauth", "", "ambient-gemini", "", "", true},
+		{"OAuth install ignores GSEARCH_API_KEY", "oauth", "", "ambient-gemini", "explicit-gsearch", "", true},
+		{"OAuth credentials without config win over env keys", "", "", "ambient-gemini", "explicit-gsearch", "", true},
+		{"API key install uses configured key", "api-key", "configured-key", "ambient-gemini", "explicit-gsearch", "configured-key", false},
+		{"no OAuth falls back to GEMINI_API_KEY", "", "", "ambient-gemini", "", "ambient-gemini", false},
+		{"no OAuth prefers GSEARCH_API_KEY", "", "", "ambient-gemini", "explicit-gsearch", "explicit-gsearch", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateServer(t)
+			if tc.oauthCreds {
+				agyCreds(t, "fake-agy-token")
+			}
+			t.Setenv("GEMINI_API_KEY", tc.gemini)
+			t.Setenv("GSEARCH_API_KEY", tc.gsearch)
+			configuredAuthType, apiKey = tc.authType, tc.configKey
+			if got := resolveAPIKey(); got != tc.want {
+				t.Fatalf("resolveAPIKey() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestLoadConfigProject(t *testing.T) {

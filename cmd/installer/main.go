@@ -45,7 +45,7 @@ const (
 	oauthAuthURL      = "https://accounts.google.com/o/oauth2/auth"
 	oauthTokenURL     = "https://oauth2.googleapis.com/token"
 	oauthUserinfoURL  = "https://www.googleapis.com/oauth2/v2/userinfo"
-	oauthScopes       = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/aicode https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
+	oauthScopes       = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs https://www.googleapis.com/auth/aicode openid"
 	credsProvider     = "antigravity"
 )
 
@@ -472,7 +472,7 @@ func serverBinaryName() string {
 }
 
 func randomState() string {
-	b := make([]byte, 32)
+	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
@@ -548,12 +548,7 @@ var oauthState struct {
 }
 
 func listenLoopback() (net.Listener, error) {
-	for port := 54565; port <= 54628; port++ {
-		if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
-			return l, nil
-		}
-	}
-	return net.Listen("tcp", "127.0.0.1:0")
+	return net.Listen("tcp", "localhost:0")
 }
 
 func startCallbackServer() error {
@@ -569,10 +564,10 @@ func startCallbackServer() error {
 	oauthState.errCh = make(chan error, 1)
 	oauthState.state = state
 	oauthState.verifier = verifier
-	oauthState.redirectURI = fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	oauthState.redirectURI = fmt.Sprintf("http://localhost:%d/auth/callback", port)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("state") != oauthState.state {
 			http.Error(w, "state mismatch", http.StatusUnauthorized)
@@ -1530,7 +1525,7 @@ func (m model) View() string {
 	switch m.step {
 	case stepBolt, stepDisclaimer:
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.2")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.3")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("%s\n", yellow.Render("⚠ unofficial · not affiliated with google · use at your own risk")))
@@ -1541,7 +1536,7 @@ func (m model) View() string {
 	default:
 		// header
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.2")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.3")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 

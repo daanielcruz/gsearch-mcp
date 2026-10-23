@@ -75,8 +75,8 @@ Rate limits are generous for normal usage. The server retries automatically with
 
 Two options:
 
-1. **Google sign-in (Antigravity)**: the installer opens Antigravity CLI's public OAuth flow with PKCE S256 and a loopback callback on `127.0.0.1`. Credentials are stored in `~/.gsearch/oauth_creds.json`.
-2. **API key**: paste a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey) into the installer, or set `GEMINI_API_KEY` / `GSEARCH_API_KEY`. This skips OAuth and does not require a project.
+1. **Google sign-in (Antigravity)**: the installer opens Antigravity CLI's public OAuth flow with PKCE S256 and a `localhost` loopback callback. Credentials are stored in `~/.gsearch/oauth_creds.json`.
+2. **API key**: paste a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey) into the installer, or set `GEMINI_API_KEY` / `GSEARCH_API_KEY`. This skips OAuth and does not require a project. Google sign-in always takes precedence: when OAuth credentials exist, these variables are ignored.
 
 Antigravity sign-in resolves the Code Assist project automatically (SMS verification may be required on first use). If the account requires a user-defined project, the installer accepts an existing Project ID and retries. It does not create projects or enable billing. The default backend is `daily-cloudcode-pa.googleapis.com`; set `GSEARCH_ANTIGRAVITY_HOST=prod` to use `cloudcode-pa.googleapis.com`.
 

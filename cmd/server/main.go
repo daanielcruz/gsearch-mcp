@@ -1050,15 +1050,16 @@ func getString(m map[string]any, key string) string {
 
 // cached per-process
 var (
-	cachedProject     string
-	projectMu         sync.Mutex
-	tokenMu           sync.Mutex
-	cachedCreds       *oauthCreds
-	cachedSessionID   = uuid.New().String()
-	apiKey            string
-	models            []string
-	modelsConfigured  bool
-	configuredProject string
+	cachedProject      string
+	projectMu          sync.Mutex
+	tokenMu            sync.Mutex
+	cachedCreds        *oauthCreds
+	cachedSessionID    = uuid.New().String()
+	apiKey             string
+	models             []string
+	modelsConfigured   bool
+	configuredProject  string
+	configuredAuthType string
 
 	apiSem        = make(chan struct{}, 1)
 	cooldownMu    sync.Mutex
@@ -1075,7 +1076,8 @@ func loadConfig() {
 	if json.Unmarshal(data, &cfg) != nil {
 		return
 	}
-	if authType, _ := cfg["auth_type"].(string); authType == "api-key" {
+	configuredAuthType, _ = cfg["auth_type"].(string)
+	if configuredAuthType == "api-key" {
 		if key, _ := cfg["api_key"].(string); key != "" {
 			apiKey = key
 		}
@@ -1095,21 +1097,33 @@ func loadConfig() {
 	}
 }
 
+// resolveAPIKey prefers OAuth: an existing Google sign-in must never be
+// replaced by an API key from the environment, which would bill that key.
+func resolveAPIKey() string {
+	if apiKey != "" {
+		return apiKey
+	}
+	if configuredAuthType == "oauth" {
+		return ""
+	}
+	if _, _, err := loadCreds(); err == nil {
+		return ""
+	}
+	if key := os.Getenv("GSEARCH_API_KEY"); key != "" {
+		return key
+	}
+	return os.Getenv("GEMINI_API_KEY")
+}
+
 func main() {
 	// load config (models, api key)
 	models = []string{defaultModel, fallbackModel}
 	loadConfig()
-
-	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
-	}
-	if apiKey == "" {
-		apiKey = os.Getenv("GSEARCH_API_KEY")
-	}
+	apiKey = resolveAPIKey()
 
 	s := server.NewMCPServer(
 		"gsearch",
-		"1.2.2",
+		"1.2.3",
 		server.WithToolCapabilities(false),
 	)
 

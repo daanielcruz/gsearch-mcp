@@ -129,17 +129,17 @@ func TestEmailFromCreds(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRandomState(t *testing.T) {
-	t.Run("returns 43-char base64url string", func(t *testing.T) {
+	t.Run("returns 22-char base64url string like Antigravity CLI", func(t *testing.T) {
 		s := randomState()
-		if len(s) < 43 {
-			t.Errorf("randomState() length = %d, want >= 43", len(s))
+		if len(s) != 22 {
+			t.Errorf("randomState() length = %d, want 22", len(s))
 		}
 		raw, err := base64.RawURLEncoding.DecodeString(s)
 		if err != nil {
 			t.Fatalf("randomState() = %q is not base64url: %v", s, err)
 		}
-		if len(raw) != 32 {
-			t.Errorf("randomState() decodes to %d bytes, want 32", len(raw))
+		if len(raw) != 16 {
+			t.Errorf("randomState() decodes to %d bytes, want 16", len(raw))
 		}
 	})
 
@@ -257,7 +257,7 @@ func TestBuildAuthURL(t *testing.T) {
 	if got := q.Get("response_type"); got != "code" {
 		t.Errorf("response_type = %q, want code", got)
 	}
-	wantScopes := "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/aicode https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile"
+	wantScopes := "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs https://www.googleapis.com/auth/aicode openid"
 	if got := q.Get("scope"); got != wantScopes {
 		t.Errorf("scope = %q, want %q", got, wantScopes)
 	}
@@ -442,8 +442,8 @@ func TestStartCallbackServerAuthURL(t *testing.T) {
 		t.Errorf("code_challenge_method = %q, want S256", got)
 	}
 	state := q.Get("state")
-	if len(state) < 43 {
-		t.Errorf("state length = %d, want >= 43", len(state))
+	if len(state) != 22 {
+		t.Errorf("state length = %d, want 22", len(state))
 	}
 	if state != oauthState.state {
 		t.Errorf("state param %q does not match oauthState.state %q", state, oauthState.state)
@@ -461,8 +461,8 @@ func TestStartCallbackServerAuthURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("redirect_uri invalid: %v", err)
 	}
-	if ru.Scheme != "http" || ru.Hostname() != "127.0.0.1" || ru.Path != "/callback" {
-		t.Errorf("redirect_uri = %q, want http://127.0.0.1:<port>/callback", redirect)
+	if ru.Scheme != "http" || ru.Hostname() != "localhost" || ru.Path != "/auth/callback" {
+		t.Errorf("redirect_uri = %q, want http://localhost:<port>/auth/callback", redirect)
 	}
 	if ru.Port() == "" {
 		t.Fatalf("redirect_uri %q has no port", redirect)
@@ -472,7 +472,7 @@ func TestStartCallbackServerAuthURL(t *testing.T) {
 	}
 
 	t.Run("callback with wrong state is rejected with 401 and no code is delivered", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/callback?state=wrong&code=steal", ru.Port()))
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%s/auth/callback?state=wrong&code=steal", ru.Port()))
 		if err != nil {
 			t.Fatalf("callback request failed: %v", err)
 		}
@@ -494,7 +494,7 @@ func TestStartCallbackServerAuthURL(t *testing.T) {
 	})
 
 	t.Run("callback with correct state delivers code", func(t *testing.T) {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%s/callback?state=%s&code=abc", ru.Port(), url.QueryEscape(oauthState.state)))
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%s/auth/callback?state=%s&code=abc", ru.Port(), url.QueryEscape(oauthState.state)))
 		if err != nil {
 			t.Fatalf("callback request failed: %v", err)
 		}
