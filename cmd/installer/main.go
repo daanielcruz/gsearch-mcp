@@ -211,7 +211,11 @@ func saveCreds(path string, c *oauthCreds) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	// WriteFile only applies the mode when creating the file.
+	return os.Chmod(path, 0600)
 }
 
 func emailFromCreds(c *oauthCreds) string {
@@ -382,7 +386,6 @@ func pollOperation(accessToken, opName string) (string, error) {
 	for i := 0; i < 20; i++ {
 		req, _ := http.NewRequest("GET", opURL, nil)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", antigravityUserAgent())
 
 		resp, err := client.Do(req)
@@ -406,7 +409,7 @@ func pollOperation(accessToken, opName string) (string, error) {
 			return id, err
 		}
 
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 	}
 
 	return "", fmt.Errorf("tempo limite do onboarding esgotado")
@@ -1527,7 +1530,7 @@ func (m model) View() string {
 	switch m.step {
 	case stepBolt, stepDisclaimer:
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.1")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.2")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("%s\n", yellow.Render("⚠ unofficial · not affiliated with google · use at your own risk")))
@@ -1538,7 +1541,7 @@ func (m model) View() string {
 	default:
 		// header
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.1")))
+		b.WriteString(fmt.Sprintf("%s %s\n", bold.Render("⚡ GSearch"), subtle.Render("v1.2.2")))
 		b.WriteString(fmt.Sprintf("%s\n", dim.Render("Pesquisa Google para ferramentas de IA")))
 		b.WriteString("\n")
 

@@ -818,6 +818,23 @@ func TestLoadCreds(t *testing.T) {
 // saveCreds
 // ---------------------------------------------------------------------------
 
+func TestSaveCredsTightensExistingPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oauth_creds.json")
+	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveCreds(path, &oauthCreds{AccessToken: "fake-renewed"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("permissions = %o, want 600", perm)
+	}
+}
+
 func TestSaveCreds(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "oauth_creds.json")
@@ -1721,6 +1738,24 @@ func TestLoadProjectAntigravity(t *testing.T) {
 				t.Fatalf("requests = %d", calls)
 			}
 		})
+	}
+}
+
+func TestOnboardAntigravityDoneImmediately(t *testing.T) {
+	isolateServer(t)
+	agyCreds(t, "fake-agy-token")
+	calls := 0
+	mockTransport(t, func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.Method != "POST" || req.URL.String() != agyDailyEndpoint+":onboardUser" {
+			t.Fatalf("request = %s %s", req.Method, req.URL)
+		}
+		return testResponse(200, `{"done":true,"response":{"cloudaicompanionProject":{"id":"instant-project"}}}`, false), nil
+	})
+	got, err := onboardUser("fake-agy-token", "free-tier", "")
+	checkResult(t, got, err, "instant-project", "")
+	if calls != 1 {
+		t.Fatalf("requests = %d, want 1 (no polling when already done)", calls)
 	}
 }
 

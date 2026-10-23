@@ -298,6 +298,23 @@ func TestOpenBrowser(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInstallerSaveCreds(t *testing.T) {
+	t.Run("tightens permissions of existing file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "oauth_creds.json")
+		if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := saveCreds(path, &oauthCreds{AccessToken: "at"}); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Fatalf("permissions = %o, want 600", perm)
+		}
+	})
+
 	t.Run("creates parent directories", func(t *testing.T) {
 		tmp := t.TempDir()
 		path := filepath.Join(tmp, "nested", "dir", "oauth_creds.json")

@@ -148,7 +148,11 @@ func loadCreds() (*oauthCreds, string, error) {
 
 func saveCreds(path string, c *oauthCreds) error {
 	data, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(path, data, 0600)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	// WriteFile only applies the mode when creating the file.
+	return os.Chmod(path, 0600)
 }
 
 func isExpired(c *oauthCreds) bool {
@@ -405,12 +409,25 @@ func onboardUser(token, tierID, projectID string) (string, error) {
 		return "", err
 	}
 
+	if done, _ := result["done"].(bool); done {
+		return operationProject(result)
+	}
+
 	opName, _ := result["name"].(string)
 	if opName == "" {
 		return "", fmt.Errorf("no operation name in onboardUser response")
 	}
 
 	return pollOperation(token, opName)
+}
+
+func operationProject(result map[string]any) (string, error) {
+	response, _ := result["response"].(map[string]any)
+	project, _ := response["cloudaicompanionProject"].(map[string]any)
+	if id, _ := project["id"].(string); id != "" {
+		return id, nil
+	}
+	return "", fmt.Errorf("onboarding completed but no project ID in response")
 }
 
 func pollOperation(token, opName string) (string, error) {
@@ -448,15 +465,10 @@ func pollOperation(token, opName string) (string, error) {
 		}
 
 		if done, _ := result["done"].(bool); done {
-			response, _ := result["response"].(map[string]any)
-			project, _ := response["cloudaicompanionProject"].(map[string]any)
-			if id, _ := project["id"].(string); id != "" {
-				return id, nil
-			}
-			return "", fmt.Errorf("onboarding completed but no project ID in response")
+			return operationProject(result)
 		}
 
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 	}
 
 	return "", fmt.Errorf("onboarding timeout — operation did not complete")
@@ -1097,12 +1109,12 @@ func main() {
 
 	s := server.NewMCPServer(
 		"gsearch",
-		"1.2.1",
+		"1.2.2",
 		server.WithToolCapabilities(false),
 	)
 
 	tool := mcp.NewTool("google_search",
-		mcp.WithDescription("Search the web using Google Search grounding. Returns an answer with inline citations and source URLs. Use for current events, documentation, news, or any real-time web information.\n\nResponse time: 2-15s typical, up to 60s with retries. On 429 the server retries automatically with dynamic backoff (typically 2s) and falls back to an alternate model. Avoid calling this tool in rapid succession — batch your search needs into a single, well-crafted query when possible.\n\nDo NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway."),
+		mcp.WithDescription("Search the web using Google Search grounding. Returns an answer with inline citations and source URLs. Use for current events, documentation, news, or any real-time web information.\n\nResponse time: 2-15s typical, up to 60s with retries. On 429 the server retries automatically with dynamic backoff (typically 2s). Avoid calling this tool in rapid succession — batch your search needs into a single, well-crafted query when possible.\n\nDo NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway."),
 		mcp.WithString("query",
 			mcp.Required(),
 			mcp.Description("Do NOT use Google dork operators (site:, filetype:, inurl:, intitle:, intext:, ext:, cache:) — Prefer natural language. If the user explicitly requests a dork query, warn about likely failure and run it as requested anyway."),

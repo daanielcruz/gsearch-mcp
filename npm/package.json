@@ -1,6 +1,6 @@
 {
   "name": "@daanielcruz/gsearch-mcp",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Free Google Search MCP. Real-time web search with inline citations for any MCP-compatible AI tool.",
   "mcpName": "io.github.daanielcruz/gsearch",
   "bin": {
