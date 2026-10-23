@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Release driver. CLI contracts: gh --help, npm --help, ClawHub docs/cli.md,
-modelcontextprotocol/registry docs/reference/cli/commands.md and API v0.1.
-Requires Python 3.9+, Go and npm; publishing also needs pre-authenticated CLIs.
-"""
+"""Publicação por gh, npm e mcp-publisher com autenticação prévia."""
 import argparse
 import hashlib
 import json
@@ -20,9 +17,8 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO = "daanielcruz/gsearch-mcp"
 NPM_REGISTRY = "https://registry.npmjs.org"
 MCP_REGISTRY = "https://registry.modelcontextprotocol.io"
-CLAW_REGISTRY = "https://clawhub.ai"
-PLATFORMS = ("darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64", "windows-amd64")
-CHANNELS = ("github", "npm", "clawhub", "mcp")
+PLATFORMS = ("darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64", "windows-amd64", "windows-arm64")
+CHANNELS = ("github", "npm", "mcp")
 
 
 class ReleaseError(Exception):
@@ -78,16 +74,18 @@ def manifests():
             if path.exists():
                 data = load(path)
                 entries = data.get("plugins", [data])
-                require(all(p["version"] == version for p in entries), f"Version mismatch: {directory}/{filename}")
+                if filename == "plugin.json":
+                    require(data.get("version") == version, f"Version mismatch: {directory}/{filename}")
+                    entry = data.get("mcpServers", {}).get("gsearch", {})
+                    require(entry.get("command") == "npx" and entry.get("args") == ["-y", f"{package['name']}@{version}"], f"MCP package pin mismatch: {directory}/{filename}")
+                else:
+                    require(all(p.get("version", version) == version for p in entries), f"Version mismatch: {directory}/{filename}")
     server_go = (ROOT / "cmd/server/main.go").read_text()
     match = re.search(r'NewMCPServer\(\s*"gsearch",\s*"([^"]+)"', server_go)
     require(match and match[1] == version, "Go server version mismatch")
     installer = (ROOT / "cmd/installer/main.go").read_text()
     displays = re.findall(r'"v(\d+\.\d+\.\d+)"', installer)
     require(displays and all(v == version for v in displays), "Go installer version mismatch")
-    skill = (ROOT / "clawhub/SKILL.md").read_text()
-    for value in re.findall(r'^version:\s*[\"\']?([\d.]+)', skill, re.MULTILINE):
-        require(value == version, "ClawHub version mismatch")
     bootstrap = (ROOT / "install.sh").read_text()
     launcher = (ROOT / "npm/bin/run.js").read_text()
     require('gsearch-server-${platform}-${arch}${ext}' in launcher, "npm binary naming contract changed")
@@ -122,7 +120,7 @@ def build(args, version, package):
     commit, dirty = git_state()
     directory = args.dist / f"v{version}"
     require(not directory.exists(), "Versioned artifact directory already exists; preserving it (choose another --dist)")
-    print(f"Build v{version}: 10 binaries, npm tarball, SHA256SUMS, source provenance")
+    print(f"Build v{version}: {len(names())} binaries, npm tarball, SHA256SUMS, source provenance")
     if args.dry_run:
         for name in names():
             print(f"  would build {name}")
@@ -201,7 +199,7 @@ def github(args, version, package, server, assets, verify_only=False):
         if not args.dry_run:
             run("gh", "release", "create", tag, *(str(p) for p in assets), "--repo", REPO, "--verify-tag", "--title", tag, "--generate-notes")
             return github(args, version, package, server, assets, verify_only=True)
-        print("github: would create release with 12 verified assets")
+        print(f"github: would create release with {len(assets)} verified assets")
 
 
 def npm(args, version, package, server, assets, verify_only=False):
@@ -221,29 +219,6 @@ def npm(args, version, package, server, assets, verify_only=False):
         require(not verify_only, "npm version not visible after publish; retry verification later")
         run("npm", "publish", str(tarball), "--access", "public", "--ignore-scripts", "--registry", NPM_REGISTRY)
         npm(args, version, package, server, assets, verify_only=True)
-
-
-def clawhub(args, version, package, server, assets, verify_only=False):
-    tool("clawhub")
-    run("clawhub", "--registry", CLAW_REGISTRY, "whoami")
-    url = f"{CLAW_REGISTRY}/api/v1/skills/gsearch/versions/{version}"
-    existing = get_json(url)
-    if existing is not None:
-        selected = existing.get("version", {})
-        require(selected.get("version") == version, "ClawHub returned unexpected version")
-        files = selected.get("files", [])
-        # ClawHub may add its generated skill-card.md; verify our source file.
-        source = next((f for f in files if f.get("path") == "SKILL.md"), {})
-        require(source.get("sha256") == sha(ROOT / "clawhub/SKILL.md"), "Existing ClawHub version content differs")
-        print("clawhub: exact version and SKILL.md digest verified; skipped")
-    elif args.dry_run:
-        print("clawhub: would publish slug gsearch at explicit version")
-    else:
-        # Legacy publish alias and flags documented by ClawHub; no login is invoked.
-        require(not verify_only, "ClawHub version not visible after upload; inspect moderation and retry verification later")
-        require({p.name for p in (ROOT / "clawhub").iterdir()} == {"SKILL.md"}, "Unexpected ClawHub source files; refusing upload")
-        run("clawhub", "--registry", CLAW_REGISTRY, "--no-input", "publish", str(ROOT / "clawhub"), "--slug", "gsearch", "--name", "GSearch - Free Google Search MCP", "--version", version, "--changelog", f"Release v{version}")
-        clawhub(args, version, package, server, assets, verify_only=True)
 
 
 def registry_normalize(value):

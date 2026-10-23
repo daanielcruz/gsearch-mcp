@@ -901,11 +901,11 @@ func wireCmd(targets []target, scopeUser, scopeProject bool, project string) tea
 					actions = append(actions, "claude-code|edited ~/.claude.json → added mcpServers.gsearch")
 				}
 				if scopeProject {
-					p := filepath.Join(".claude", "settings.json")
+					p := ".mcp.json"
 					if err := injectMCPServer(p, "gsearch", mcpEntry); err != nil {
 						return errMsg{fmt.Errorf("claude project wire: %w", err)}
 					}
-					actions = append(actions, "claude-code|edited .claude/settings.json → added mcpServers.gsearch")
+					actions = append(actions, "claude-code|edited .mcp.json → added mcpServers.gsearch")
 				}
 
 			case "cursor":
@@ -1580,7 +1580,7 @@ func (m model) View() string {
 				on    bool
 			}{
 				{"user", "~/.claude.json", m.scopeUser},
-				{"project", ".claude/settings.json", m.scopeProject},
+				{"project", ".mcp.json", m.scopeProject},
 			}
 			for i, s := range scopes {
 				cur := "  "

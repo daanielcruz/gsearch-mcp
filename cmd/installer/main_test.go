@@ -741,7 +741,7 @@ func TestPasteModeValidatesState(t *testing.T) {
 func TestInjectMCPServer(t *testing.T) {
 	t.Run("new file (does not exist yet)", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "settings.json")
+		path := filepath.Join(tmp, ".mcp.json")
 
 		entry := map[string]any{
 			"command": "/usr/bin/gsearch-server",
@@ -779,7 +779,7 @@ func TestInjectMCPServer(t *testing.T) {
 
 	t.Run("existing file with other servers", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "settings.json")
+		path := filepath.Join(tmp, ".mcp.json")
 
 		existing := map[string]any{
 			"mcpServers": map[string]any{
@@ -821,7 +821,7 @@ func TestInjectMCPServer(t *testing.T) {
 
 	t.Run("overwrite existing gsearch entry", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "settings.json")
+		path := filepath.Join(tmp, ".mcp.json")
 
 		existing := map[string]any{
 			"mcpServers": map[string]any{
@@ -853,7 +853,7 @@ func TestInjectMCPServer(t *testing.T) {
 
 	t.Run("creates parent directories if needed", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "deep", "nested", "settings.json")
+		path := filepath.Join(tmp, "deep", "nested", ".mcp.json")
 
 		entry := map[string]any{"command": "/bin/test"}
 		if err := injectMCPServer(path, "gsearch", entry); err != nil {
@@ -867,7 +867,7 @@ func TestInjectMCPServer(t *testing.T) {
 
 	t.Run("existing file without mcpServers key", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "settings.json")
+		path := filepath.Join(tmp, ".mcp.json")
 
 		existing := map[string]any{
 			"someKey": "someValue",
@@ -899,7 +899,7 @@ func TestInjectMCPServer(t *testing.T) {
 
 	t.Run("returns error for unparseable existing file", func(t *testing.T) {
 		tmp := t.TempDir()
-		path := filepath.Join(tmp, "settings.json")
+		path := filepath.Join(tmp, ".mcp.json")
 		os.WriteFile(path, []byte("{bad json"), 0644)
 
 		entry := map[string]any{"command": "/bin/test"}
@@ -1410,6 +1410,16 @@ func TestViewNoPanic(t *testing.T) {
 			if output == "" {
 				t.Error("View() returned empty string")
 			}
+			if s == stepScope {
+				for _, path := range []string{"~/.claude.json", ".mcp.json"} {
+					if !strings.Contains(output, path) {
+						t.Errorf("scope view missing %q: %q", path, output)
+					}
+				}
+				if strings.Contains(output, ".claude/settings.json") {
+					t.Errorf("scope view shows obsolete MCP path: %q", output)
+				}
+			}
 		})
 	}
 
@@ -1647,6 +1657,132 @@ func TestResolveOthersideMCPPath(t *testing.T) {
 			}
 			if os.Getenv("OTHERSIDE_CONFIG_DIR") != tc.override || os.Getenv("APPDATA") != tc.appData {
 				t.Error("path resolution changed environment variables")
+			}
+		})
+	}
+}
+
+func TestWireCmdClaudeScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		user            bool
+		project         bool
+		existingProject bool
+		standalone      bool
+		standaloneFirst bool
+	}{
+		{name: "new project config", project: true},
+		{name: "project preserves entries", project: true, existingProject: true},
+		{name: "Claude then standalone preserves entries", project: true, existingProject: true, standalone: true},
+		{name: "standalone then Claude preserves entries", project: true, existingProject: true, standalone: true, standaloneFirst: true},
+		{name: "user scope stays in claude.json", user: true, existingProject: true},
+		{name: "user and project scopes", user: true, project: true, existingProject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "User With Spaces")
+			work := filepath.Join(root, "project")
+			for _, dir := range []string{home, filepath.Join(work, ".claude")} {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Chdir(work)
+
+			projectPath := filepath.Join(work, ".mcp.json")
+			userPath := filepath.Join(home, ".claude.json")
+			settingsPath := filepath.Join(work, ".claude", "settings.json")
+			settings := "{\n  \"permissions\": {\"allow\": [\"Read\"]},\n  \"mcpServers\": {\"legacy\": {\"command\": \"leave-untouched\"}}\n}\n"
+			original := map[string]string{
+				userPath: `{"mcpServers":{"user-tool":{"command":"keep-user"}},"userSetting":"keep"}`,
+			}
+			if tc.existingProject {
+				original[projectPath] = `{"mcpServers":{"other":{"command":"keep-project"},"gsearch":{"command":"old-server"}},"projectSetting":{"keep":true}}`
+			}
+			for path, content := range original {
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(settingsPath, []byte(settings), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			targets := []target{{name: "claude-code", enabled: true}}
+			if tc.standalone {
+				standalone := target{name: "standalone (.mcp.json)", enabled: true}
+				if tc.standaloneFirst {
+					targets = append([]target{standalone}, targets...)
+				} else {
+					targets = append(targets, standalone)
+				}
+			}
+			entry := map[string]any{
+				"command": filepath.Join(home, ".gsearch", serverBinaryName()),
+				"env":     map[string]any{"GSEARCH_PROJECT": "cloud-project"},
+			}
+			firstWrite := make(map[string]string)
+			for run := 0; run < 2; run++ {
+				msg := wireCmd(targets, tc.user, tc.project, "cloud-project")()
+				done, ok := msg.(wireDoneMsg)
+				if !ok {
+					t.Fatalf("wireCmd() run %d = %#v, want wireDoneMsg", run, msg)
+				}
+				actions := strings.Join(done.actions, "\n")
+				for _, scope := range []struct {
+					path   string
+					on     bool
+					action string
+				}{
+					{userPath, tc.user, "claude-code|edited ~/.claude.json → added mcpServers.gsearch"},
+					{projectPath, tc.project, "claude-code|edited .mcp.json → added mcpServers.gsearch"},
+				} {
+					if strings.Contains(actions, scope.action) != scope.on {
+						t.Errorf("scope action %q enabled=%v, got %v", scope.action, scope.on, done.actions)
+					}
+					data, err := os.ReadFile(scope.path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !scope.on {
+						if string(data) != original[scope.path] {
+							t.Errorf("unselected scope %s was changed: %s", scope.path, data)
+						}
+						continue
+					}
+					want := map[string]any{}
+					if content := original[scope.path]; content != "" {
+						if err := json.Unmarshal([]byte(content), &want); err != nil {
+							t.Fatal(err)
+						}
+					}
+					servers, ok := want["mcpServers"].(map[string]any)
+					if !ok {
+						servers = map[string]any{}
+					}
+					servers["gsearch"] = entry
+					want["mcpServers"] = servers
+					var got map[string]any
+					if err := json.Unmarshal(data, &got); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("config %s = %v, want %v", scope.path, got, want)
+					}
+					if run == 0 {
+						firstWrite[scope.path] = string(data)
+					} else if string(data) != firstWrite[scope.path] {
+						t.Errorf("config %s is not idempotent: %s", scope.path, data)
+					}
+				}
+				if data, err := os.ReadFile(settingsPath); err != nil || string(data) != settings {
+					t.Errorf("project .claude/settings.json was changed: %q, %v", data, err)
+				}
+				if strings.Contains(actions, ".claude/settings.json") {
+					t.Errorf("wire actions show obsolete MCP path: %v", done.actions)
+				}
 			}
 		})
 	}
