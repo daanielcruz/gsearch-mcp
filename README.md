@@ -7,10 +7,6 @@
 >
 > Not affiliated with Google. Uses the same public OAuth client and API as the [Antigravity CLI](https://antigravity.google/product/antigravity-cli).
 >
-> 
-> Google recently banned some OpenClaw users. OpenClaw use cases for oauth providers look abusive to me. GSearch doesn't fit that pattern. Risk still exists.
->
-> Requests carry Antigravity CLI's User-Agent, ideType, and request shape, matching the official client on the wire _(if u a googler reading this: we good ppl, plz don't hunt us 🙏)_. If that bothers you, use a throwaway Google account.
 
 ---
 
